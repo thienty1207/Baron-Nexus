@@ -52,7 +52,6 @@ Run from the repository root with Go 1.27.0:
 - `GOTOOLCHAIN=local CGO_ENABLED=0 /usr/local/go/bin/go test -count=1 ./...` — PASS.
 - `git diff --check` — PASS.
 
-The release directory, checksum output, and final candidate revision are added
-to `docs/implementation/FINAL_ACCEPTANCE_REPORT.md` after the release smoke
-run. The final status remains BLOCKED until the external gates above are
-available.
+Candidate release evidence is recorded in
+`docs/implementation/FINAL_ACCEPTANCE_REPORT.md`. The final status remains
+BLOCKED until the external gates above are available.
