@@ -1,0 +1,32 @@
+# Baron Shared Brain repository outputs
+/bin/
+/dist/
+/coverage/
+/profiles/
+/release/
+/tmp/
+*.test
+*.out
+
+# Go tooling
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# Never add Rust build output or vendored Rust dependencies.
+/target/
+/vendor/
+
+# Per-project Baron runtime and credentials (rules are also merged into projects).
+.baron/.env
+.baron/checkpoint.json
+.baron/runtime/
+.baron/*.bak
+.baron/*.tmp
+

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "project": "Baron Shared Brain",
+  "source": "IMPLEMENT.pdf",
+  "go_baseline": {
+    "language": "Go",
+    "toolchain": "go1.27.0",
+    "cgo": false,
+    "rust_or_cargo_allowed": false,
+    "sqlite_driver": "modernc.org/sqlite"
+  },
+  "contracts": [
+    {"id":"R1","name":"same_project_shared_brain"},
+    {"id":"R2","name":"no_hidden_reasoning_transfer"},
+    {"id":"R3","name":"project_isolation"},
+    {"id":"R4","name":"automatic_project_provisioning"},
+    {"id":"R5","name":"abrupt_interruption_recovery"},
+    {"id":"R6","name":"offline_first_continuity"},
+    {"id":"R7","name":"dsh_mandatory_baseline"},
+    {"id":"R8","name":"codex_skills_user_owned"},
+    {"id":"R9","name":"automated_tencent_initialization"},
+    {"id":"R10","name":"project_local_ignored_secrets"},
+    {"id":"R11","name":"simple_cli"},
+    {"id":"R12","name":"no_mandatory_baron_daemon"},
+    {"id":"R13","name":"model_traffic_independent"},
+    {"id":"R14","name":"cross_platform_identity"},
+    {"id":"R15","name":"go_implementation_baseline"}
+  ],
+  "phase_tests": {
+    "0":["P0-TEST01","P0-TEST02","P0-TEST03","P0-TEST04"],
+    "1":["P1-TEST01","P1-TEST02","P1-TEST03","P1-TEST04"],
+    "2":["P2-TEST01","P2-TEST02","P2-TEST03","P2-TEST04"],
+    "3":["P3-TEST01","P3-TEST02","P3-TEST03","P3-TEST04"],
+    "4":["P4-TEST01","P4-TEST02","P4-TEST03","P4-TEST04","P4-TEST05","P4-TEST06"],
+    "5":["P5-TEST01","P5-TEST02","P5-TEST03","P5-TEST04"],
+    "6":["P6-TEST01","P6-TEST02","P6-TEST03","P6-TEST04","P6-TEST05"],
+    "7":["P7-TEST01","P7-TEST02","P7-TEST03","P7-TEST04","P7-TEST05"],
+    "8":["P8-TEST01","P8-TEST02","P8-TEST03","P8-TEST04"],
+    "9":["P9-TEST01","P9-TEST02","P9-TEST03","P9-TEST04"],
+    "10":["P10-TEST01","P10-TEST02","P10-TEST03","P10-TEST04","P10-TEST05"],
+    "11":["P11-TEST01","P11-TEST02","P11-TEST03","P11-TEST04","P11-TEST05"],
+    "12":["P12-TEST01","P12-TEST02","P12-TEST03","P12-TEST04","P12-TEST05"],
+    "13":["P13-TEST01","P13-TEST02","P13-TEST03","P13-TEST04"],
+    "14":["P14-TEST01","P14-TEST02","P14-TEST03","P14-TEST04"],
+    "15":["P15-TEST01","P15-TEST02","P15-TEST03","P15-TEST04"],
+    "16":["P16-TEST01","P16-TEST02","P16-TEST03","P16-TEST04"],
+    "17":["P17-TEST01","P17-TEST02","P17-TEST03","P17-TEST04","P17-TEST05"],
+    "18":["P18-TEST01","P18-TEST02","P18-TEST03","P18-TEST04","P18-TEST05","P18-TEST06"],
+    "19":["P19-TEST01","P19-TEST02","P19-TEST03","P19-TEST04","P19-TEST05","P19-TEST06","P19-TEST07","P19-TEST08","P19-TEST09","P19-TEST10","P19-TEST11","P19-TEST12"]
+  },
+  "final_acceptance": [
+    "F01","F02","F03","F04","F05","F06","F07","F08","F09","F10","F11","F12",
+    "F13","F14","F15","F16","F17","F18","F19","F20","F21","F22","F23","F24"
+  ]
+}
+
