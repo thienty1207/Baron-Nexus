@@ -75,6 +75,7 @@ type IsolationContext struct {
 	AgentID   string `json:"agent_id"`
 	UserID    string `json:"user_id,omitempty"`
 	ServiceID string `json:"service_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 }
 
 func (c IsolationContext) Validate() error {
@@ -143,6 +144,16 @@ type MemoryBackend interface {
 	EnsureProjectAgent(context.Context, IsolationContext, string) (ProjectBinding, error)
 	Capture(context.Context, IsolationContext, MemoryRecord, string) (MemoryReceipt, error)
 	Search(context.Context, IsolationContext, MemoryQuery) ([]MemoryRecord, error)
+}
+
+// LayeredMemoryBackend is optional. Tencent v3 exposes profile/core and
+// conversation layers in addition to atomic search; callers can use these
+// methods when available without coupling the core to Tencent response types.
+type LayeredMemoryBackend interface {
+	MemoryBackend
+	ReadCore(context.Context, IsolationContext, MemoryQuery) ([]MemoryRecord, error)
+	ReadScenario(context.Context, IsolationContext, MemoryQuery) ([]MemoryRecord, error)
+	SearchConversations(context.Context, IsolationContext, MemoryQuery) ([]MemoryRecord, error)
 }
 
 type IdentitySpec struct {

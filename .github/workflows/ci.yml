@@ -1,0 +1,21 @@
+name: Baron CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.0'
+      - run: go test ./...
+      - run: go vet ./...
+      - run: GOOS=linux GOARCH=amd64 go build -trimpath -o dist/baron-linux-amd64 ./cmd/baron
+      - run: GOOS=windows GOARCH=amd64 go build -trimpath -o dist/baron-windows-amd64.exe ./cmd/baron
+

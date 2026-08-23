@@ -1,0 +1,11 @@
+{
+  "name": "@baron-shared-brain/dsh-adapter",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js", "cordis.patch.yml"],
+  "description": "Minimal DeepSeek Harness lifecycle boundary for Baron",
+  "engines": {"node": ">=22.19.0 <23 || >=24"},
+  "dsh": {"bundle": {"patch": "./cordis.patch.yml"}}
+}
