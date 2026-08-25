@@ -65,8 +65,11 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 		RestoreWithOptions: func(archive string, replaceExisting bool) error {
 			return classifyError(a.restoreWithOptions(context.Background(), archive, replaceExisting))
 		},
-		Install: func() (string, error) { return a.installBaronBinary(true) },
-		Update:  func() (string, error) { return a.installBaronBinary(false) },
+		Install: func() (string, error) {
+			message, err := a.installAndBootstrap(context.Background())
+			return message, classifyError(err)
+		},
+		Update: func() (string, error) { return a.installBaronBinary(false) },
 		Hook: func(client, event string, input io.Reader, output io.Writer) error {
 			return a.HandleHook(context.Background(), client, event, "", input, output)
 		},
