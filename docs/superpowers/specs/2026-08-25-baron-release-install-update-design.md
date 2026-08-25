@@ -2,7 +2,7 @@
 
 **Status:** Approved by the requested command contract
 
-**Goal:** Publish Baron Nexus `0.1.0` as a verified native release that users can install from GitHub, inspect with `baron --version`, and upgrade later with `baron update` without losing Baron, project, or Tencent state.
+**Goal:** Publish Baron Nexus `0.1.1` as a verified native release that users can install from GitHub, inspect with `baron --version`, and upgrade later with `baron update` without losing Baron, project, or Tencent state.
 
 ## User contract
 
@@ -14,7 +14,7 @@ baron install
 baron update
 ```
 
-`baron --version` prints exactly `baron 0.1.0` for the initial release. `baron install` downloads the latest compatible Baron release for the current OS and architecture, verifies its release manifest and SHA-256 entry, and installs it atomically. `baron update` performs the same verified transaction but reports a no-op when the current binary already matches the latest release.
+`baron --version` prints exactly `baron 0.1.1` for this release. `baron install` downloads the latest compatible Baron release for the current OS and architecture, verifies its release manifest and SHA-256 entry, installs it atomically, then runs the idempotent host/DSH/Codex/Tencent/project bootstrap. `baron update` performs only the verified binary transaction and reports a no-op when the current binary already matches the latest release.
 
 The first bootstrap still uses the signed/verified GitHub release installer because a user cannot invoke a binary that has not yet been downloaded. The shell and PowerShell installers therefore download the release candidate, verify it, and place it in the user installation directory. Once the command exists, `baron install` and `baron update` use the same release protocol.
 
@@ -43,7 +43,7 @@ Linux amd64 is the first live target. Windows amd64 keeps the PowerShell install
 - `internal/cli/`: version flag plus `install` and `update` commands.
 - `internal/app/`: wires release operations without coupling them to project/Tencent state.
 - `install.sh`, `install.ps1`: first-download installers with checksum verification and explicit overwrite protection.
-- `scripts/build-release.sh`: emits versioned native artifacts and release metadata for `0.1.0`.
+- `scripts/build-release.sh`: emits versioned native artifacts and release metadata for `0.1.1`.
 - `.github/workflows/release.yml`: builds and publishes tagged GitHub releases.
 - `README.md`: public install/version/update instructions.
 
@@ -52,5 +52,5 @@ Linux amd64 is the first live target. Windows amd64 keeps the PowerShell install
 - CLI tests cover exact version output, command registration, and error propagation.
 - Release-client tests cover asset selection, checksum mismatch, manifest/tag mismatch, bounded downloads, unsupported platform, and successful verified installation with rollback.
 - Shell/PowerShell syntax and release manifest/checksum tests pass.
-- A `v0.1.0` artifact is built locally, verified, and pushed to the supplied GitHub repository; the public release workflow remains the source for future `baron update` candidates.
+- A `v0.1.1` artifact is built locally and verified before publication; the public release workflow remains the source for future `baron update` candidates.
 - Existing full Go tests, vet, CGO-free builds, branding/platform scans, and secret scans remain green.

@@ -63,7 +63,7 @@ else
     latest) BASE_URL="https://github.com/$REPOSITORY/releases/latest/download" ;;
     v*) BASE_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_VERSION" ;;
     [0-9]*.[0-9]*.[0-9]*) BASE_URL="https://github.com/$REPOSITORY/releases/download/v$RELEASE_VERSION" ;;
-    *) printf '%s\n' 'BARON_RELEASE_VERSION must be latest or a semantic version such as 0.1.0.' >&2; exit 2 ;;
+    *) printf '%s\n' 'BARON_RELEASE_VERSION must be latest or a semantic version such as 0.1.1.' >&2; exit 2 ;;
   esac
   case "$(uname -s):$(uname -m)" in
     Linux:x86_64|Linux:amd64) ASSET=baron-linux-amd64 ;;

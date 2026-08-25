@@ -18,14 +18,15 @@ using TencentDB Agent Memory as the long-term memory and knowledge plane.
 The normal user workflow must remain short:
 
 ```bash
-baron deepseek-harness init
-baron codex-cli init
-baron tencent-memory init
-baron test
-
+git clone https://github.com/thienty1207/Baron-Nexus.git
+cd Baron-Nexus
+./install.sh
 cd /path/to/project
-baron setup
+baron install
 ```
+
+The individual `baron ... init` commands remain available for advanced repair;
+`baron install` is the idempotent first-run coordinator.
 
 After setup, DSH and Codex are used normally. Baron Nexus must automatically
 handle local event capture, checkpointing, recovery, Tencent memory, Wiki,
@@ -35,10 +36,11 @@ project's memory assets.
 
 ## Platform policy
 
-- Ubuntu/Debian Linux: `baron tencent-memory init` may install Docker Engine and
-  Compose through the official package path, but it must check `sudo` before
-  any network download. If sudo is unavailable or unauthorized, it must stop
-  before creating partial state and print the exact repair instruction.
+- Ubuntu/Debian Linux: `baron install` and `baron tencent-memory init` may
+  install Docker Engine and Compose through the official package path, but they
+  must check `sudo` before any network download. If sudo is unavailable or
+  unauthorized, they must stop before creating partial state and print the
+  exact repair instruction.
 - Windows: Baron does not silently install Docker Desktop, WSL, or Ubuntu. It
   prints an actionable prerequisite guide and preserves the same command
   surface.
@@ -672,7 +674,7 @@ release acceptance are pending.
 - [X] **P18-T08** Keep README quick start limited to the simple user command surface and put diagnostics in troubleshooting.
 - [X] **P18-T09** Document the current Docker prerequisite and supported platform boundaries; P21 will replace the Linux prerequisite with automated bootstrap.
 - [X] **P18-T10** Enforce that a public release requires complete P19 acceptance evidence, not only local artifact smoke.
-- [X] **P18-T11** Embed Baron Nexus version `0.1.0` and expose the stable `baron --version` output contract.
+- [X] **P18-T11** Embed Baron Nexus version `0.1.1` and expose the stable `baron --version` output contract.
 - [X] **P18-T12** Add verified GitHub release metadata/checksum download, atomic `baron install`, idempotent `baron update`, and rollback validation without touching project/Tencent state.
 - [X] **P18-T13** Make Linux/PowerShell first-download installers use the verified GitHub release channel and add a tag-triggered public release workflow.
 
@@ -685,8 +687,8 @@ release acceptance are pending.
 - [X] **P18-TEST05** Injected migration failure restores the prior binary/config/database.
 - [X] **P18-TEST06** Release audit proves no Rust/Cargo dependency, no `target/`, CGO policy compliance, and native artifact launch.
 - [X] **P18-TEST07** Local release fixture proves `baron install/update` reject checksum/manifest/version failures before mutation and preserve rollback state.
-- [X] **P18-TEST08** Versioned Linux/Windows `0.1.0` artifacts, installers, manifest, SBOM, toolchain metadata, and SHA256SUMS verify locally.
-- [ ] **P18-TEST09** Public GitHub `v0.1.0` release downloads through the first installer and a clean user can run `baron --version` and `baron update`.
+- [X] **P18-TEST08** Versioned Linux/Windows `0.1.1` artifacts, installers, manifest, SBOM, toolchain metadata, and SHA256SUMS verify locally.
+- [ ] **P18-TEST09** Public GitHub `v0.1.1` release downloads through the first installer and a clean user can run `baron --version` and `baron update`.
 
 ## P19 — Final full-system acceptance and release gate `[ ]` BLOCKED
 
@@ -945,13 +947,16 @@ DSH/Codex handoff, isolation, recovery, and Windows guidance all have evidence.
 
 ### Implementation tasks
 
-- [X] **P27-T01** Update Linux/Windows quick start so the user-facing command sequence remains unchanged while the behind-the-scenes behavior is documented accurately.
+- [X] **P27-T01** Update Linux/Windows quick start so the user-facing sequence is `./install.sh` followed by `baron install`, while individual init commands remain available for repair.
 - [X] **P27-T02** Ship release artifacts/installers with Linux bootstrap prerequisites, Windows guidance, version/digest manifest, checksum, SBOM, and rollback evidence.
 - [ ] **P27-T03** Run supported Ubuntu/Debian matrix: missing sudo, fresh Docker install, existing Docker, stopped daemon, reboot, rerun, repair, and uninstall-safe behavior.
 - [ ] **P27-T04** Run real DSH/Codex/Tencent end-to-end scenarios with memory, Wiki, CodeGraph, Skill, checkpoints, recovery, and cross-agent handoff.
 - [ ] **P27-T05** Run Windows release/guidance scenario and prove no false claim that Docker/WSL/Tencent were auto-installed.
 - [X] **P27-T06** Generate the final evidence report with candidate SHA, component versions/digests, phase checklist, blockers, artifacts, and release decision.
 - [X] **P27-T07** Publish only when all mandatory Nexus gates are checked; otherwise leave the final status explicitly `BLOCKED` with the exact missing dependency/evidence.
+- [X] **P27-T08** Make `baron install` run the ordered host-preflight, DSH, Codex, Tencent, and current-project setup coordinator with idempotent delegated steps.
+- [X] **P27-T09** Require native sudo authorization before the first release download and never read or persist the sudo password.
+- [X] **P27-T10** Reuse official/managed DSH and Tencent credentials and suppress the Codex login notice once global Codex auth is ready.
 
 ### Mandatory tests
 
@@ -973,7 +978,7 @@ are intentionally left unchecked.
 - Full local verification passed from the repository root: `GOTOOLCHAIN=local /usr/local/go/bin/go test -count=1 ./...`, `GOTOOLCHAIN=local /usr/local/go/bin/go vet ./...`, `GOTOOLCHAIN=local CGO_ENABLED=0 /usr/local/go/bin/go test -count=1 ./...`, `gofmt -l .`, `git diff --check`, no-`target/`, shell syntax, branding, platform guidance, DSH adapter, and release-gate fixture checks.
 - The direct DSH adapter test initially returned `126` because its shebang file had mode `0664`; the root cause was the untracked test script's missing executable bit, not adapter behavior. The mode is now `0755`, and direct execution passes. No production code was changed for this harness-only defect.
 - A fresh CGO race attempt was made. `go test -race` correctly required cgo, and `CGO_ENABLED=1 go test -race ./...` stopped at the host boundary with `gcc not found`; this remains an unchecked race/environment gate rather than a claimed pass.
-- A fresh native `0.1.0` release was built in `/tmp/baron-release-0.1.0.final.O1bDqT` with Go 1.27.0, CGO disabled, Linux amd64 and Windows amd64 artifacts, installers, manifest, module SBOM, toolchain metadata, and verified `SHA256SUMS`. The Linux artifact completed `--version` and installer/update fixture smoke; the release gate still returns `BLOCKED` for incomplete P19/P22/P27 evidence.
+- A fresh native `0.1.1` release is being built in `/tmp/baron-release-0.1.1.final` with Go 1.27.0, CGO disabled, Linux amd64 and Windows amd64 artifacts, installers, manifest, module SBOM, toolchain metadata, and verified `SHA256SUMS`. The release gate remains `BLOCKED` for incomplete P19/P22/P27 evidence and public publication.
 - Live health checks returned HTTP `200` for MemoryCore `8420`, MemoryHub `8125`, Knowledge `8424`, and Proxy `8096`; the upstream Knowledge compose contract passes with its documented `docker/env.example`. The current agent terminal cannot access the Docker socket, and both requested non-interactive sudo checks require interactive authentication, so clean-machine bootstrap, restart/volume, and container inspection remain unchecked.
 - A fresh `baron tencent-memory init` rerun exited `0` without a sudo prompt because its health-first idempotence saw the already-healthy four-endpoint stack. This proves safe rerun behavior only; it does not prove clean-machine Docker bootstrap and does not close the P22/P27 bootstrap gates.
 - A live disposable non-Git project reused one Tencent Agent/Wiki binding; setup rerun reached Wiki `ready`, CodeGraph `local_only` for the absent Git remote, and zero pending/dead-letter queue items. A separate live Git-backed disposable project created a CodeGraph with honest `processing`/`pending` state after Tencent returned `409 busy`; it was not marked ready.
@@ -1053,25 +1058,25 @@ these concrete external acceptance prerequisites:
 When the roadmap is complete, the user should only need to understand this:
 
 ```bash
-baron deepseek-harness init
-baron codex-cli init
-baron tencent-memory init
-baron test
-
+git clone https://github.com/thienty1207/Baron-Nexus.git
+cd Baron-Nexus
+./install.sh
 cd /path/to/project
-baron setup
+baron install
 
 # daily use
 dsh web
 codex
 ```
 
-On Ubuntu/Debian, `baron tencent-memory init` performs the sudo preflight before
-download, installs Docker when needed, deploys the full Tencent stack, starts
-the services, provisions the Baron identity, registers project memory/knowledge,
-and configures restart/repair behavior. Missing provider/admin values are
-collected through hidden input and written only to their supported protected
-stores; users do not edit `.env` or Tencent metadata manually. On Windows, it prints the required
+On Ubuntu/Debian, `./install.sh` performs the verified first binary download
+only after native sudo authorization. Then `baron install` performs the Docker
+preflight, installs/repairs the full Tencent stack, starts the services,
+provisions the Baron identity, registers project memory/knowledge, and runs
+project setup. Missing provider/admin values are collected through hidden input
+and written only to their supported protected stores; users do not edit `.env`
+or Tencent metadata manually. Codex login is requested only when its global
+auth is missing and is reused afterward. On Windows, it prints the required
 Docker Desktop/WSL/Ubuntu/Tencent actions instead of pretending to automate UI
 installation.
 

@@ -2,17 +2,13 @@
 
 ## Candidate
 
-- Source revision: `543f19a8a16557abaaa414f1a3af0ecc32806e6d`.
+- Source revision: pending final 0.1.1 documentation/verification commit.
 - Working tree: final release candidate; user-local `.baron/` state remains
   untracked and intentionally excluded from the release.
-- Version: `0.1.0`.
+- Version: `0.1.1`.
 - Toolchain: `go1.27.0 linux/amd64`
-- Release directory: `/tmp/baron-release-0.1.0.final.O1bDqT`
-- Linux SHA-256: `6d62098d5fe5c0a04d2f5669a45cb6bd97552eba2d71c573c64d58ba424beb0e`
-- Windows SHA-256: `40fb8ff2a0397c87c8f3178012be8df8846060b96e1b1a6a8df9a7d04353c23d`
-- Release manifest SHA-256: `398535ace002d5fa1bdf8e8d8938d540a7fda5c4d0dc7aa7beb2d178be906767`
-- Toolchain file SHA-256: `76227025cc0bc2be7067aa45d11e09cacfd49c58f498f4c2e4f6a9872a607bf9`
-- SBOM SHA-256: `a3e949d6f9cb2c9e3cfd72e346db408050a0530f8953f5aa6e382e777747f84c`
+- Release directory: `/tmp/baron-release-0.1.1.final`
+- Release SHA-256 values: populated from the final 0.1.1 `SHA256SUMS` after build.
 
 ## Implemented surface
 
@@ -45,9 +41,12 @@
   runtime smoke.
 - Linux amd64 and Windows amd64 CGO-free release artifacts, checksum manifest,
   module SBOM, shell/PowerShell installers, and update rollback logic.
-- Stable `baron 0.1.0` version output, verified GitHub release metadata and
+- Stable `baron 0.1.1` version output, verified GitHub release metadata and
   SHA-256 download protocol, atomic Linux `baron install`/`baron update`,
   idempotent update behavior, and staged Windows restart guidance.
+- One-command `baron install` bootstrap coordinator: native host preflight,
+  DSH, Codex, Tencent, and current-project setup in deterministic order, with
+  hidden credential prompts only for missing values and reusable Codex auth.
 
 ## Expansion phase checklist
 

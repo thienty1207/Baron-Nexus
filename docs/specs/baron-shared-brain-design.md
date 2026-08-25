@@ -25,7 +25,7 @@ The following contracts are authoritative and are represented exactly once in
 | R8 | Codex initialization installs/verifies Codex and Baron hooks without taking ownership of user skills/plugins. |
 | R9 | Tencent initialization creates/reuses the Baron user, active user key, global `baron-projects` team, and services without creating Main Developer. |
 | R10 | Project secrets live in `.baron/.env`, are ignored by Git, and have restrictive permissions; `project.toml` is non-secret and commit-safe. |
-| R11 | The normal CLI is `init`, `test`, and `setup`; support commands are status, doctor, repair, backup, and restore. |
+| R11 | The normal CLI is `install`, `init`, `test`, and `setup`; `install` performs the idempotent first-run bootstrap, while support commands are status, doctor, repair, backup, and restore. |
 | R12 | No Baron daemon is required; hooks invoke the Go binary on demand. |
 | R13 | Memory failure never reroutes model traffic; provider traffic remains independent. |
 | R14 | `project_id` survives path changes and OS reinstall; path is secondary metadata. |

@@ -23,7 +23,8 @@ replacement is explicit. Windows users can download `install.ps1` from the
 same release and run it with PowerShell.
 
 After Baron is installed, the binary can refresh itself from the verified
-GitHub release channel:
+GitHub release channel. `baron install` also runs the first-run runtime
+bootstrap for the current project; `baron update` remains binary-only:
 
 ```text
 baron install
@@ -38,25 +39,45 @@ identity, checkpoints, credentials, or Tencent state.
 
 ## Quick start
 
-On Ubuntu/Debian, `baron tencent-memory init` checks sudo first and can install
-Docker Engine, Compose, and the managed Tencent stack automatically. Windows
-prints the Docker Desktop/WSL prerequisite guide without silently changing the
-machine.
+On Ubuntu/Debian, a new user needs only the verified source bootstrap and one
+project command:
+
+```text
+git clone https://github.com/thienty1207/Baron-Nexus.git
+cd Baron-Nexus
+./install.sh
+cd /path/to/project
+baron install
+```
+
+`./install.sh` asks the native `sudo` program to authorize the operation before
+it downloads release metadata or the binary. Baron never receives, echoes, or
+stores the sudo password. If sudo is unavailable, the installer stops before
+network activity and prints the remediation. After the binary exists,
+`baron install` verifies the current release, preflights Docker, installs or
+repairs the supported Ubuntu/Debian Docker runtime, initializes DSH and Codex,
+starts the managed Tencent services, and runs `baron setup` for the current
+project. The sequence is idempotent, so rerunning it repairs missing Baron-owned
+pieces without replacing project identity or user-owned agent configuration.
+
+The initializer commands remain available separately for advanced repair:
 
 ```text
 baron deepseek-harness init
 baron codex-cli init
 baron tencent-memory init
 baron test
-cd /path/to/project
-baron setup
 ```
 
-The initializer commands are interactive only when a value is genuinely
-missing. Baron asks for provider keys with terminal echo disabled, writes the
-DeepSeek key to DSH's official `$DSH_HOME/.credentials.yaml`, and reuses it for
-Tencent. `baron test` is always read-only and never prompts. For automation or
-CI, provide the key through the environment instead:
+Credentials are requested only when genuinely missing. Baron asks for DSH and
+Tencent provider/admin values with terminal echo disabled, writes the DeepSeek
+key to DSH's official `$DSH_HOME/.credentials.yaml`, and reuses it for Tencent.
+Codex ChatGPT sign-in remains owned by Codex: if global Codex auth is absent,
+Baron prints one action to run `codex` and complete sign-in; once completed,
+that auth is reused across projects and later launches. Baron does not ask for
+the ChatGPT password or copy OAuth secrets. `baron test` is always read-only and
+never prompts. For automation or CI, provide the provider key through the
+environment instead:
 
 ```text
 export DEEPSEEK_API_KEY=<your-provider-key>
@@ -70,14 +91,15 @@ and starts MemoryCore, MemoryHub/Panel, Proxy, and the combined Knowledge
 Service. It does not open the Panel for manual setup. Proxy values default to
 the same provider; custom providers can use the `BARON_TENCENT_*` environment
 overrides. If the managed deployment has no admin key, Baron asks for it
-through the same hidden prompt and keeps it in process memory only. Baron never
-prints provider, admin, or user keys and never stores them in project state.
+through the same hidden prompt and keeps it in the managed protected store for
+future idempotent runs. Baron never prints provider, admin, or user keys and
+never stores them in project state.
 
 If an initializer is launched without a terminal and a required value is
 missing, it stops before Docker/Tencent downloads and reports the exact
-environment variable to set. On Windows, install Docker Desktop, WSL2, and
-Ubuntu manually first; Baron reports this prerequisite instead of claiming to
-install Windows components silently.
+environment variable to set. On Windows, install Docker Desktop, WSL2, Ubuntu,
+and the required Tencent service prerequisites manually first; Baron reports
+this prerequisite without silently claiming to install Windows components.
 
 Use `dsh web` or `codex` normally after setup. Baron hooks are short-lived and
 invoke the Go binary on demand.
