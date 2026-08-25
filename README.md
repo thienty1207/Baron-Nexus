@@ -16,7 +16,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected first release output is `baron 0.1.0`. The installer downloads the
+The expected first release output is `baron 0.1.1`. The installer downloads the
 release manifest, SHA-256 list, and matching native binary before writing to
 `~/.local/bin/baron`; it refuses to replace an existing binary unless the
 replacement is explicit. Windows users can download `install.ps1` from the

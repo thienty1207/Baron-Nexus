@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/baron-shared-brain/baron/internal/version"
 )
 
 func TestCLIExposesFrozenCommandSurface(t *testing.T) {
@@ -26,13 +28,19 @@ func TestCLIExposesFrozenCommandSurface(t *testing.T) {
 
 func TestVersionFlagUsesBaronFormat(t *testing.T) {
 	var out bytes.Buffer
-	cmd := New(Options{Version: "0.1.0", Out: &out, Err: &out})
+	cmd := New(Options{Version: "0.1.1", Out: &out, Err: &out})
 	cmd.SetArgs([]string{"--version"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(out.String()); got != "baron 0.1.0" {
+	if got := strings.TrimSpace(out.String()); got != "baron 0.1.1" {
 		t.Fatalf("version output=%q", got)
+	}
+}
+
+func TestDefaultVersionIsBaron011(t *testing.T) {
+	if version.Value != "0.1.1" {
+		t.Fatalf("default version=%q, want 0.1.1", version.Value)
 	}
 }
 
@@ -40,7 +48,7 @@ func TestInstallAndUpdateCommandsInvokeDedicatedHandlers(t *testing.T) {
 	var out bytes.Buffer
 	installCalled, updateCalled := false, false
 	options := Options{
-		Version: "0.1.0", Out: &out, Err: &out,
+		Version: "0.1.1", Out: &out, Err: &out,
 		Install: func() (string, error) { installCalled = true; return "install ok", nil },
 		Update:  func() (string, error) { updateCalled = true; return "update ok", nil },
 	}

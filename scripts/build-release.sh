@@ -3,7 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 GO_BIN=${GO_BIN:-/usr/local/go/bin/go}
-VERSION=${BARON_VERSION:-0.1.0}
+VERSION=${BARON_VERSION:-0.1.1}
 OUT=${BARON_RELEASE_DIR:-"$ROOT/dist/$VERSION"}
 SOURCE_REVISION=${BARON_SOURCE_REVISION:-unknown}
 if [ "$SOURCE_REVISION" = "unknown" ]; then
@@ -20,7 +20,7 @@ if [ -d "$ROOT/target" ]; then
 fi
 
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  printf '%s\n' 'BARON_VERSION must be a semantic version such as 0.1.0.' >&2
+  printf '%s\n' 'BARON_VERSION must be a semantic version such as 0.1.1.' >&2
   exit 2
 fi
 
