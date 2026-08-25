@@ -302,7 +302,7 @@ git commit -m "docs: publish Baron Nexus 0.1.1 bootstrap flow"
 - Consumes: the committed 0.1.1 source and the published local bootstrap coordinator.
 - Produces: fresh release hashes, local tag `v0.1.1`, and evidence separating user-level PASS from unavailable external Docker/sudo/GitHub/Windows gates.
 
-- [ ] **Step 1: Run the complete local verification suite**
+- [X] **Step 1: Run the complete local verification suite**
 
 ```bash
 GOTOOLCHAIN=local /usr/local/go/bin/go test -count=1 ./...
@@ -314,28 +314,28 @@ git diff --check
 
 Expected: exit 0, no formatting output, and no diff-check output.
 
-- [ ] **Step 2: Build and install the 0.1.1 Linux/Windows artifacts**
+- [X] **Step 2: Build and install the 0.1.1 Linux/Windows artifacts**
 
 ```bash
-BARON_VERSION=0.1.1 BARON_RELEASE_DIR=/tmp/baron-release-0.1.1.final ./scripts/build-release.sh
-release_binary=/tmp/baron-release-0.1.1.final/baron-linux-amd64
+BARON_VERSION=0.1.1 BARON_RELEASE_DIR=/tmp/baron-release-0.1.1.final.akD6Ay ./scripts/build-release.sh
+release_binary=/tmp/baron-release-0.1.1.final.akD6Ay/baron-linux-amd64
 release_sha=$(sha256sum "$release_binary" | awk '{print $1}')
 BARON_BINARY_SOURCE="$release_binary" BARON_BINARY_SHA256="$release_sha" BARON_INSTALL_PATH=/home/ty/.local/bin/baron BARON_ALLOW_REPLACE=1 ./install.sh
-(cd /tmp/baron-release-0.1.1.final && sha256sum -c SHA256SUMS)
+(cd /tmp/baron-release-0.1.1.final.akD6Ay && sha256sum -c SHA256SUMS)
 /home/ty/.local/bin/baron --version
 ```
 
 Expected: `baron 0.1.1` and all checksum entries report `OK`.
 
-- [ ] **Step 3: Run the real target-project bootstrap**
+- [X] **Step 3: Run the real target-project bootstrap**
 
 From `/home/ty/project-test`, run `baron install` in a terminal with the normal PATH and credential stores. Record whether the release endpoint is available; if GitHub is not published yet, run the coordinator through its local test seam and report the release 404 honestly rather than bypassing it.
 
-- [ ] **Step 4: Verify one-time rerun behavior**
+- [X] **Step 4: Verify one-time rerun behavior**
 
 Run the initialized DSH/Codex/Tencent/project flow a second time with a prompt reader that would fail if called. Confirm project ID, Tencent identity, Codex hooks, DSH credential path, queue counts, and Wiki status are unchanged except for fresh timestamps.
 
-- [ ] **Step 5: Run the release gate and record blockers**
+- [X] **Step 5: Run the release gate and record blockers**
 
 ```bash
 ./scripts/check-release-gate.sh

@@ -104,7 +104,7 @@ Run from the repository root with Go 1.27.0:
 - A CGO race run was attempted and remains host-blocked: `go test -race` needs
   cgo, while `CGO_ENABLED=1 go test -race ./...` reports that `gcc` is absent.
 - Native release verification passed in
-  `/tmp/baron-release-0.1.1.final`: Linux ELF and Windows PE32+ artifacts,
+  `/tmp/baron-release-0.1.1.final.akD6Ay`: Linux ELF and Windows PE32+ artifacts,
   manifest, SBOM, toolchain metadata, installers, and all seven checksum entries verified;
   the Linux artifact also passed isolated setup/status/hook smoke.
 - Four live Tencent health endpoints returned HTTP 200 and the managed Compose

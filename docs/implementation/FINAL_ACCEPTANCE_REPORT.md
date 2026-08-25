@@ -2,13 +2,17 @@
 
 ## Candidate
 
-- Source revision: pending final 0.1.1 documentation/verification commit.
+- Source revision: `b91ba3a3051e508eff0f8dc60341e07abd6cbd79` (0.1.1 implementation candidate).
 - Working tree: final release candidate; user-local `.baron/` state remains
   untracked and intentionally excluded from the release.
 - Version: `0.1.1`.
 - Toolchain: `go1.27.0 linux/amd64`
-- Release directory: `/tmp/baron-release-0.1.1.final`
-- Release SHA-256 values: populated from the final 0.1.1 `SHA256SUMS` after build.
+- Release directory: `/tmp/baron-release-0.1.1.final.akD6Ay`
+- Linux SHA-256: `b024404ff519c4e69f3158fff4fed35dbc18397cf0ee7a8a63390d3e4fce7bd7`
+- Windows SHA-256: `b7b98386a37689d95d0623e27896bc1a840a2dcc5c3dc69c7e2bfd1d04d5c5f4`
+- Release manifest SHA-256: `274f5be27c8b0d05c3d3cfbced1ac8f799d2fc32a7f7ad49de0507ea8eaeca3b`
+- Toolchain file SHA-256: `76227025cc0bc2be7067aa45d11e09cacfd49c58f498f4c2e4f6a9872a607bf9`
+- SBOM SHA-256: `a3e949d6f9cb2c9e3cfd72e346db408050a0530f8953f5aa6e382e777747f84c`
 
 ## Implemented surface
 
@@ -103,6 +107,12 @@ The following commands passed from the repository root:
   or Tencent state.
 - `scripts/check-branding_test.sh`, `scripts/check-platform-guidance_test.sh`,
   and `scripts/check-release-gate_test.sh`.
+- `scripts/check-install-preflight_test.sh`, which proves Linux sudo
+  authorization is checked before the first release download and no password
+  variable or echo path exists in `install.sh`.
+- Focused and full tests for the ordered `baron install` bootstrap plus
+  state-aware Codex login notice: an authenticated global Codex store produces
+  no repeat sign-in notice, while missing auth produces one actionable notice.
 - Fresh 2026-08-25 direct `scripts/check-dsh-adapter_test.sh` execution after
   correcting its missing executable bit; the adapter test passed.
 - Fresh `docker compose --env-file docker/env.example config --quiet` passed
@@ -216,8 +226,16 @@ These are environment limitations, not converted mock passes:
   four Tencent health surfaces were ready, while Docker daemon and sudo were
   not.
 - The installed `/home/ty/.local/bin/baron` matches the rebuilt Linux release
-  artifact (`6d62098d5fe5c0a04d2f5669a45cb6bd97552eba2d71c573c64d58ba424beb0e`)
-  and reports `baron 0.1.0`.
+  artifact (`b024404ff519c4e69f3158fff4fed35dbc18397cf0ee7a8a63390d3e4fce7bd7`)
+  and reports `baron 0.1.1`. It was staged locally from the verified artifact;
+  the interactive first-download shell installer remains subject to its native
+  sudo prompt and public GitHub release availability.
+- From `/home/ty/project-test`, the real `baron install` command reached the
+  configured GitHub release endpoint and returned HTTP 404 because `v0.1.1`
+  has not been published yet; the command therefore stopped before bootstrap,
+  exactly as the verified-release contract requires. The ordered bootstrap is
+  covered by the full app tests and the existing project acceptance was rerun
+  with the rebuilt 0.1.1 binary through DSH, Codex, Tencent, setup, and repair.
 - In disposable `/home/ty/project-test`, real DSH, Codex, and Tencent init plus
   `baron setup` and `baron repair` completed. The project status ended with
   Wiki `ready`, zero pending/dead-letter queue items, and honest CodeGraph
