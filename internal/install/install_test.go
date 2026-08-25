@@ -107,6 +107,80 @@ func TestCodexHookMergeEmitsOfficialNestedCommandShape(t *testing.T) {
 	}
 }
 
+func TestCodexHookMergeUsesCodexSupportedTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	if err := MergeCodexHooks(path, "baron"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	events := config["hooks"].(map[string]any)
+	groups := events["SessionEnd"].([]any)
+	for _, raw := range groups {
+		group := raw.(map[string]any)
+		commands, ok := group["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, commandRaw := range commands {
+			command := commandRaw.(map[string]any)
+			if command["command"] != "baron hook codex SessionEnd" {
+				continue
+			}
+			if timeout, ok := command["timeout"].(float64); !ok || timeout != 3 {
+				t.Fatalf("Codex hook timeout=%v, want 3 seconds", command["timeout"])
+			}
+			return
+		}
+	}
+	t.Fatal("Baron SessionEnd hook missing")
+}
+
+func TestCodexHookMergeRepairsExistingHookTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	original := []byte(`{"hooks":{"SessionEnd":[{"hooks":[{"type":"command","command":"baron hook codex SessionEnd","timeout":5}]}]}}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := MergeCodexHooks(path, "baron"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	events := config["hooks"].(map[string]any)
+	groups := events["SessionEnd"].([]any)
+	for _, raw := range groups {
+		group := raw.(map[string]any)
+		commands, ok := group["hooks"].([]any)
+		if !ok {
+			continue
+		}
+		for _, commandRaw := range commands {
+			command := commandRaw.(map[string]any)
+			if command["command"] != "baron hook codex SessionEnd" {
+				continue
+			}
+			if timeout, ok := command["timeout"].(float64); !ok || timeout != 3 {
+				t.Fatalf("existing Codex hook timeout=%v, want 3 seconds", command["timeout"])
+			}
+			return
+		}
+	}
+	t.Fatal("existing Baron SessionEnd hook missing")
+}
+
 func TestCodexHookInspectionSeparatesConfigurationFromInteractiveTrust(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hooks.json")
 	if err := MergeCodexHooks(path, "baron"); err != nil {

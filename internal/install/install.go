@@ -14,6 +14,8 @@ import (
 
 var codexEvents = []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PreCompact", "PostCompact", "Stop", "SessionEnd"}
 
+const codexHookTimeoutSeconds = 3
+
 func MergeCodexHooks(path, binary string) error {
 	if binary == "" {
 		binary = "baron"
@@ -42,6 +44,7 @@ func MergeCodexHooks(path, binary string) error {
 				continue
 			}
 			if value, _ := entry["command"].(string); value == command {
+				entry["timeout"] = codexHookTimeoutSeconds
 				found = true
 				break
 			}
@@ -49,6 +52,7 @@ func MergeCodexHooks(path, binary string) error {
 			for _, commandRaw := range commands {
 				commandEntry, ok := commandRaw.(map[string]any)
 				if ok && commandEntry["type"] == "command" && commandEntry["command"] == command {
+					commandEntry["timeout"] = codexHookTimeoutSeconds
 					found = true
 					break
 				}
@@ -59,7 +63,7 @@ func MergeCodexHooks(path, binary string) error {
 		}
 		if !found {
 			items = append(items, map[string]any{"hooks": []any{map[string]any{
-				"type": "command", "command": command, "timeout": 5,
+				"type": "command", "command": command, "timeout": codexHookTimeoutSeconds,
 				"statusMessage": "Baron project continuity",
 			}}})
 		}
