@@ -22,6 +22,23 @@ if ! printf '%s' "$REPOSITORY" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$'; t
   exit 2
 fi
 
+case "$(uname -s)" in
+  Linux)
+    command -v sudo >/dev/null 2>&1 || {
+      printf '%s\n' 'sudo is required before Baron can download and install the Linux release.' >&2
+      exit 20
+    }
+    if ! sudo -v; then
+      printf '%s\n' 'sudo authorization is required before Baron can download and install the Linux release.' >&2
+      exit 20
+    fi
+    if ! sudo -n -v; then
+      printf '%s\n' 'Baron could not verify sudo authorization; rerun from an interactive terminal.' >&2
+      exit 20
+    fi
+    ;;
+esac
+
 if [ -e "$DEST" ] && [ "${BARON_ALLOW_REPLACE:-0}" != "1" ]; then
   printf '%s\n' "Refusing to overwrite existing baron command at $DEST; set BARON_ALLOW_REPLACE=1 only for an explicit migration." >&2
   exit 20
