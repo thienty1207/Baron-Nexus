@@ -15,7 +15,22 @@ type ContextPacket struct {
 	ProjectID   string
 	Text        string
 	Records     []contracts.MemoryRecord
+	Knowledge   []KnowledgeCitation
 	RemoteError string
+}
+
+type KnowledgeCitation struct {
+	Source    string
+	Reference string
+	Content   string
+	Trust     string
+	Freshness string
+}
+
+// KnowledgeBackend is intentionally smaller than the Tencent client. Adapters
+// can retrieve only the project Wiki/CodeGraph slices relevant to a prompt.
+type KnowledgeBackend interface {
+	Retrieve(context.Context, contracts.IsolationContext, contracts.MemoryQuery) ([]KnowledgeCitation, error)
 }
 
 func PrepareMemoryRecord(record contracts.MemoryRecord, secrets []string) contracts.MemoryRecord {
@@ -36,6 +51,10 @@ func PrepareMemoryRecord(record contracts.MemoryRecord, secrets []string) contra
 }
 
 func BuildContext(ctx context.Context, local WorkState, backend contracts.MemoryBackend, isolation contracts.IsolationContext, query contracts.MemoryQuery, maxChars int, secrets []string) (ContextPacket, error) {
+	return BuildContextWithKnowledge(ctx, local, backend, nil, isolation, query, maxChars, secrets)
+}
+
+func BuildContextWithKnowledge(ctx context.Context, local WorkState, backend contracts.MemoryBackend, knowledge KnowledgeBackend, isolation contracts.IsolationContext, query contracts.MemoryQuery, maxChars int, secrets []string) (ContextPacket, error) {
 	if err := isolation.Validate(); err != nil {
 		return ContextPacket{}, err
 	}
@@ -100,6 +119,21 @@ func BuildContext(ctx context.Context, local WorkState, backend contracts.Memory
 		}
 		rawRecords = records
 	}
+	if knowledge != nil {
+		citations, knowledgeErr := knowledge.Retrieve(ctx, isolation, query)
+		if knowledgeErr != nil {
+			packet.RemoteError = config.Redact("Tencent knowledge unavailable: "+knowledgeErr.Error(), secrets)
+		}
+		for index := range citations {
+			citations[index].Content = truncate(config.Redact(citations[index].Content, secrets), 4096)
+			citations[index].Reference = truncate(config.Redact(citations[index].Reference, secrets), 512)
+			citations[index].Trust = firstNonEmpty(citations[index].Trust, "historical-reference-only")
+			citations[index].Freshness = firstNonEmpty(citations[index].Freshness, "unknown")
+			if strings.TrimSpace(citations[index].Content) != "" {
+				packet.Knowledge = append(packet.Knowledge, citations[index])
+			}
+		}
+	}
 	records := rawRecords
 	sort.SliceStable(records, func(i, j int) bool { return records[i].CreatedAt.After(records[j].CreatedAt) })
 	var builder strings.Builder
@@ -114,6 +148,13 @@ func BuildContext(ctx context.Context, local WorkState, backend contracts.Memory
 		}
 		builder.WriteString(line)
 	}
+	for _, citation := range packet.Knowledge {
+		line := fmt.Sprintf("Knowledge [%s; trust=%s; freshness=%s; ref=%s]: %s\n", html.EscapeString(citation.Source), html.EscapeString(citation.Trust), html.EscapeString(citation.Freshness), html.EscapeString(citation.Reference), html.EscapeString(citation.Content))
+		if builder.Len()+len(line) > maxChars-120 {
+			break
+		}
+		builder.WriteString(line)
+	}
 	if packet.RemoteError != "" && builder.Len()+len(packet.RemoteError)+30 < maxChars {
 		builder.WriteString("Remote memory unavailable; local continuity used.\n")
 	}
@@ -122,6 +163,15 @@ func BuildContext(ctx context.Context, local WorkState, backend contracts.Memory
 	packet.Text = truncate(builder.String(), maxChars)
 	packet.Records = records
 	return packet, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func truncate(value string, max int) string {

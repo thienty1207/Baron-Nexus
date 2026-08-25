@@ -20,6 +20,7 @@ const (
 	ExitTencentUnavailable    = 12
 	ExitProjectNotInitialized = 13
 	ExitUnsupportedUpstream   = 14
+	ExitReleaseUnavailable    = 15
 	ExitIntegrityFailure      = 20
 	ExitPartialResult         = 30
 )
@@ -33,23 +34,32 @@ func (e *ExitError) Error() string { return e.Err.Error() }
 func (e *ExitError) Unwrap() error { return e.Err }
 
 type Options struct {
-	Out          io.Writer
-	Err          io.Writer
-	Setup        func(path string) error
-	Test         func(jsonOutput bool) error
-	TestOutput   func(jsonOutput bool) (string, error)
-	Status       func(jsonOutput bool) error
-	StatusOutput func(jsonOutput bool) (string, error)
-	Doctor       func(jsonOutput bool) error
-	DoctorOutput func(jsonOutput bool) (string, error)
-	Repair       func() error
-	Backup       func(destination string) error
-	Restore      func(archive string) error
-	Init         map[string]func() error
-	Hook         func(client, event string, input io.Reader, output io.Writer) error
+	Version            string
+	In                 io.Reader
+	Out                io.Writer
+	Err                io.Writer
+	Setup              func(path string) error
+	Test               func(jsonOutput bool) error
+	TestOutput         func(jsonOutput bool) (string, error)
+	Status             func(jsonOutput bool) error
+	StatusOutput       func(jsonOutput bool) (string, error)
+	Doctor             func(jsonOutput bool) error
+	DoctorOutput       func(jsonOutput bool) (string, error)
+	Repair             func() error
+	Backup             func(destination string) error
+	Restore            func(archive string) error
+	RestoreWithOptions func(archive string, replaceExisting bool) error
+	Install            func() (string, error)
+	Update             func() (string, error)
+	Init               map[string]func() error
+	InitNotice         map[string]string
+	Hook               func(client, event string, input io.Reader, output io.Writer) error
 }
 
 func (o *Options) normalize() {
+	if o.In == nil {
+		o.In = os.Stdin
+	}
 	if o.Out == nil {
 		o.Out = os.Stdout
 	}
@@ -62,10 +72,15 @@ func New(options Options) *cobra.Command {
 	options.normalize()
 	root := &cobra.Command{
 		Use:           "baron",
-		Short:         "Baron Shared Brain project continuity sidecar",
+		Short:         "Baron Nexus project continuity sidecar",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	if options.Version != "" {
+		root.Version = options.Version
+		root.SetVersionTemplate("baron {{.Version}}\n")
+	}
+	root.SetIn(options.In)
 	root.SetOut(options.Out)
 	root.SetErr(options.Err)
 
@@ -136,12 +151,17 @@ func New(options Options) *cobra.Command {
 	}
 	root.AddCommand(backup)
 
+	replaceExisting := false
 	restore := &cobra.Command{
 		Use:   "restore <archive>",
 		Short: "Validate and restore a Baron backup.",
 		Args:  exactArgs(1, "restore requires an archive"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if options.Restore != nil {
+			if options.RestoreWithOptions != nil {
+				if err := options.RestoreWithOptions(args[0], replaceExisting); err != nil {
+					return err
+				}
+			} else if options.Restore != nil {
 				if err := options.Restore(args[0]); err != nil {
 					return err
 				}
@@ -150,7 +170,10 @@ func New(options Options) *cobra.Command {
 			return nil
 		},
 	}
+	restore.Flags().BoolVar(&replaceExisting, "replace-existing", false, "replace an existing Baron state only after moving it to a recoverable sibling backup")
 	root.AddCommand(restore)
+	root.AddCommand(binaryCommand("install", "Download and install the latest verified Baron release.", options.Install))
+	root.AddCommand(binaryCommand("update", "Download and atomically update to the latest verified Baron release.", options.Update))
 
 	hook := &cobra.Command{
 		Use:    "hook <client> <event>",
@@ -168,6 +191,28 @@ func New(options Options) *cobra.Command {
 	return root
 }
 
+func binaryCommand(name, short string, handler func() (string, error)) *cobra.Command {
+	return &cobra.Command{
+		Use:   name,
+		Short: short,
+		Args:  exactArgs(0, name+" accepts no arguments"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if handler == nil {
+				return errors.New("Baron binary release handler is not configured")
+			}
+			message, err := handler()
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(message) == "" {
+				message = "Baron " + name + " complete."
+			}
+			_, _ = fmt.Fprintln(cmd.OutOrStdout(), message)
+			return nil
+		},
+	}
+}
+
 func initCommand(name string, options Options, short string) *cobra.Command {
 	parent := &cobra.Command{Use: name, Short: short}
 	child := &cobra.Command{
@@ -180,6 +225,9 @@ func initCommand(name string, options Options, short string) *cobra.Command {
 				}
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s initialization complete.\n", name)
+			if notice := options.InitNotice[name]; notice != "" {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ACTION REQUIRED: %s\n", notice)
+			}
 			return nil
 		},
 	}

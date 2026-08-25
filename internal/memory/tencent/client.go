@@ -11,26 +11,31 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf16"
 
 	"github.com/baron-shared-brain/baron/internal/config"
 	"github.com/baron-shared-brain/baron/internal/contracts"
 )
 
 type Config struct {
-	Endpoint    string
-	HubEndpoint string
-	UserKey     string
-	AdminKey    string
-	AuthToken   string
-	ServiceID   string
-	HTTPClient  *http.Client
-	Timeout     time.Duration
+	Endpoint          string
+	HubEndpoint       string
+	KnowledgeEndpoint string
+	UserKey           string
+	AdminKey          string
+	AuthToken         string
+	Secrets           []string
+	ServiceID         string
+	HTTPClient        *http.Client
+	Timeout           time.Duration
 }
 
 type Client struct {
 	config Config
 	http   *http.Client
 }
+
+const tencentConversationContentLimit = 8192
 
 var _ contracts.MemoryBackend = (*Client)(nil)
 var _ contracts.LayeredMemoryBackend = (*Client)(nil)
@@ -44,6 +49,23 @@ func NewClient(config Config) *Client {
 		httpClient = &http.Client{Timeout: config.Timeout}
 	}
 	return &Client{config: config, http: httpClient}
+}
+
+// withUserKey creates a client for caller-scoped mutations. The bootstrap
+// admin key remains on the parent client for user management, while team
+// creation/deletion must authenticate as the user named by owner_user_id.
+func (c *Client) withUserKey(userKey string) *Client {
+	return NewClient(Config{
+		Endpoint:          c.config.Endpoint,
+		HubEndpoint:       c.config.HubEndpoint,
+		KnowledgeEndpoint: c.config.KnowledgeEndpoint,
+		UserKey:           userKey,
+		AuthToken:         c.config.AuthToken,
+		Secrets:           c.config.Secrets,
+		ServiceID:         c.config.ServiceID,
+		HTTPClient:        c.http,
+		Timeout:           c.config.Timeout,
+	})
 }
 
 func (c *Client) Health(ctx context.Context) error {
@@ -65,7 +87,10 @@ func (c *Client) HealthAt(ctx context.Context, endpoint string) error {
 
 func (c *Client) VerifyAuth(ctx context.Context) error {
 	var response map[string]any
-	if err := c.do(ctx, http.MethodPost, "/v3/meta/auth/verify", nil, &response); err != nil {
+	if strings.TrimSpace(c.config.UserKey) == "" {
+		return errors.New("Tencent user-key authentication requires a user key")
+	}
+	if err := c.doUnredacted(ctx, http.MethodPost, "/v3/meta/auth/verify", map[string]any{"user_key": c.config.UserKey}, &response); err != nil {
 		return fmt.Errorf("Tencent user-key authentication failed: %w", err)
 	}
 	return nil
@@ -83,6 +108,7 @@ func (c *Client) Capture(ctx context.Context, isolation contracts.IsolationConte
 	}
 	record.ProjectID = isolation.ProjectID
 	record.Content = config.Redact(record.Content, c.secretValues())
+	record.Content = boundTencentConversationContent(record.Content)
 	for key, value := range record.Metadata {
 		record.Metadata[key] = config.Redact(value, c.secretValues())
 	}
@@ -114,6 +140,44 @@ func (c *Client) Capture(ctx context.Context, isolation contracts.IsolationConte
 		requestID = idempotencyKey
 	}
 	return contracts.MemoryReceipt{RequestID: requestID, ContentHash: record.ContentHash, IdempotencyKey: idempotencyKey, DeliveredAt: time.Now().UTC()}, nil
+}
+
+func boundTencentConversationContent(value string) string {
+	const suffix = "...[truncated]"
+	if utf16Length(value) <= tencentConversationContentLimit {
+		return value
+	}
+	budget := tencentConversationContentLimit - utf16Length(suffix)
+	if budget <= 0 {
+		return suffix
+	}
+	var builder strings.Builder
+	used := 0
+	for _, character := range value {
+		width := utf16.RuneLen(character)
+		if width < 0 {
+			width = 1
+		}
+		if used+width > budget {
+			break
+		}
+		builder.WriteRune(character)
+		used += width
+	}
+	builder.WriteString(suffix)
+	return builder.String()
+}
+
+func utf16Length(value string) int {
+	length := 0
+	for _, character := range value {
+		width := utf16.RuneLen(character)
+		if width < 0 {
+			width = 1
+		}
+		length += width
+	}
+	return length
 }
 
 func (c *Client) Search(ctx context.Context, isolation contracts.IsolationContext, query contracts.MemoryQuery) ([]contracts.MemoryRecord, error) {
@@ -150,7 +214,14 @@ func (c *Client) ReadCore(ctx context.Context, isolation contracts.IsolationCont
 }
 
 func (c *Client) ReadScenario(ctx context.Context, isolation contracts.IsolationContext, query contracts.MemoryQuery) ([]contracts.MemoryRecord, error) {
-	return c.readLayer(ctx, "/v3/scenario/read", isolation, query)
+	path := strings.TrimSpace(query.ScenarioPath)
+	if path == "" {
+		// Tencent's scenario/read endpoint is path-addressed, not text-search
+		// addressed. Generic recall queries must not send an empty path and turn
+		// an otherwise healthy remote memory read into a false outage.
+		return nil, nil
+	}
+	return c.readLayerWithBody(ctx, "/v3/scenario/read", isolation, query, map[string]any{"path": path})
 }
 
 func (c *Client) SearchConversations(ctx context.Context, isolation contracts.IsolationContext, query contracts.MemoryQuery) ([]contracts.MemoryRecord, error) {
@@ -158,6 +229,10 @@ func (c *Client) SearchConversations(ctx context.Context, isolation contracts.Is
 }
 
 func (c *Client) readLayer(ctx context.Context, path string, isolation contracts.IsolationContext, query contracts.MemoryQuery) ([]contracts.MemoryRecord, error) {
+	return c.readLayerWithBody(ctx, path, isolation, query, nil)
+}
+
+func (c *Client) readLayerWithBody(ctx context.Context, path string, isolation contracts.IsolationContext, query contracts.MemoryQuery, extra map[string]any) ([]contracts.MemoryRecord, error) {
 	if err := validateIsolation(isolation); err != nil {
 		return nil, err
 	}
@@ -168,6 +243,9 @@ func (c *Client) readLayer(ctx context.Context, path string, isolation contracts
 	}
 	if isolation.SessionID != "" {
 		body["session_id"] = isolation.SessionID
+	}
+	for key, value := range extra {
+		body[key] = value
 	}
 	var response json.RawMessage
 	if err := c.do(ctx, http.MethodPost, path, body, &response); err != nil {
@@ -202,7 +280,8 @@ func (c *Client) EnsureProjectAgent(ctx context.Context, isolation contracts.Iso
 	createBody := map[string]any{
 		"name":        displayName,
 		"description": "Baron project_id=" + isolation.ProjectID,
-		"team_id":     isolation.TeamID, "user_id": isolation.UserID, "project_id": isolation.ProjectID,
+		"team_id":     isolation.TeamID, "owner_user_id": isolation.UserID,
+		"user_id": isolation.UserID, "project_id": isolation.ProjectID,
 	}
 	var created json.RawMessage
 	if err := c.do(ctx, http.MethodPost, "/v3/meta/agent/create", createBody, &created); err != nil {
@@ -215,52 +294,139 @@ func (c *Client) EnsureProjectAgent(ctx context.Context, isolation contracts.Iso
 	return contracts.ProjectBinding{ProjectID: isolation.ProjectID, TeamID: isolation.TeamID, AgentID: agents[0].ID, AgentName: firstNonEmpty(agents[0].Name, displayName), UserID: isolation.UserID}, nil
 }
 
+// FindProjectAgent verifies an existing project binding without creating or
+// mutating Tencent metadata. Restore/recovery uses this path so a stale or
+// missing remote agent is reported for repair instead of silently producing a
+// duplicate agent under the same project identity.
+func (c *Client) FindProjectAgent(ctx context.Context, isolation contracts.IsolationContext) (contracts.ProjectBinding, error) {
+	if strings.TrimSpace(isolation.ProjectID) == "" || strings.TrimSpace(isolation.TeamID) == "" {
+		return contracts.ProjectBinding{}, errors.New("project_id and team_id are required to verify an agent")
+	}
+	if strings.TrimSpace(isolation.UserID) == "" {
+		return contracts.ProjectBinding{}, errors.New("user_id is required to verify an agent")
+	}
+	body := map[string]any{"team_id": isolation.TeamID, "user_id": isolation.UserID, "project_id": isolation.ProjectID}
+	var response json.RawMessage
+	if err := c.do(ctx, http.MethodPost, "/v3/meta/agent/list", body, &response); err != nil {
+		return contracts.ProjectBinding{}, err
+	}
+	for _, agent := range decodeAgents(response) {
+		if agent.ProjectID == isolation.ProjectID || strings.Contains(agent.Description, "project_id="+isolation.ProjectID) {
+			return contracts.ProjectBinding{
+				ProjectID: isolation.ProjectID,
+				TeamID:    isolation.TeamID,
+				AgentID:   agent.ID,
+				AgentName: agent.Name,
+				UserID:    isolation.UserID,
+			}, nil
+		}
+	}
+	return contracts.ProjectBinding{}, fmt.Errorf("Tencent project agent for %s was not found; run baron setup to repair the binding", isolation.ProjectID)
+}
+
 func (c *Client) EnsureIdentity(ctx context.Context, spec contracts.IdentitySpec) (contracts.Identity, error) {
+	identity, _, err := c.EnsureIdentityWithRollback(ctx, spec)
+	return identity, err
+}
+
+// EnsureIdentityWithRollback provisions only the requested Baron user/key/team
+// and returns a receipt that can compensate entities created by this call if a
+// later verification or persistence step fails. Existing entities are never
+// added to the receipt and therefore can never be deleted by Rollback.
+func (c *Client) EnsureIdentityWithRollback(ctx context.Context, spec contracts.IdentitySpec) (contracts.Identity, *IdentityProvision, error) {
+	return c.EnsureIdentityWithExistingUserKey(ctx, spec, "")
+}
+
+// EnsureIdentityWithExistingUserKey is the repair-safe form of identity
+// provisioning. Tencent returns a user-key secret only when a key is created;
+// list/get responses expose only key_id and a masked prefix. A caller that has
+// already persisted the secret can provide it here so repeated init runs do
+// not create an unnecessary replacement key.
+func (c *Client) EnsureIdentityWithExistingUserKey(ctx context.Context, spec contracts.IdentitySpec, existingUserKey string) (contracts.Identity, *IdentityProvision, error) {
 	if strings.TrimSpace(spec.UserName) == "" {
 		spec.UserName = "baron"
 	}
 	if strings.TrimSpace(spec.TeamName) == "" {
 		spec.TeamName = "baron-projects"
 	}
-	user, err := c.ensureNamed(ctx, "/v3/meta/user/list", "/v3/meta/user/create", "username", spec.UserName)
+	provision := &IdentityProvision{client: c}
+	fail := func(err error) (contracts.Identity, *IdentityProvision, error) {
+		if err == nil {
+			return contracts.Identity{}, provision, nil
+		}
+		if rollbackErr := provision.Rollback(ctx); rollbackErr != nil {
+			return contracts.Identity{}, provision, fmt.Errorf("%v; newly created Baron metadata rollback failed: %w", err, rollbackErr)
+		}
+		return contracts.Identity{}, provision, err
+	}
+	user, created, err := c.ensureNamedTracked(ctx, "/v3/meta/user/list", "/v3/meta/user/create", "username", spec.UserName)
 	if err != nil {
-		return contracts.Identity{}, err
+		return fail(err)
 	}
 	userID := user.ID
-	userKey := firstNonEmpty(user.UserKey, user.DefaultUserKey)
+	if created {
+		if id := opaqueEntityID(user); id != "" {
+			provision.add("user", id, userID, "")
+		} else {
+			return fail(errors.New("Tencent user create returned no opaque rollback ID"))
+		}
+	}
+	userKey := strings.TrimSpace(existingUserKey)
+	if userKey == "" {
+		userKey = firstNonEmpty(user.UserKey, user.DefaultUserKey, user.KeyValue)
+	}
 	if userKey == "" {
 		var keys json.RawMessage
 		if err := c.do(ctx, http.MethodPost, "/v3/meta/user-key/list", map[string]any{"user_id": userID}, &keys); err != nil {
-			return contracts.Identity{}, err
+			return fail(err)
 		}
 		keyItems := decodeAgents(keys)
-		if len(keyItems) > 0 {
-			userKey = firstNonEmpty(keyItems[0].UserKey, keyItems[0].ID)
+		for _, keyItem := range keyItems {
+			userKey = firstNonEmpty(keyItem.UserKey, keyItem.KeyValue)
+			if userKey != "" {
+				break
+			}
 		}
 	}
 	if userKey == "" {
 		var created json.RawMessage
 		if err := c.do(ctx, http.MethodPost, "/v3/meta/user-key/create", map[string]any{"user_id": userID}, &created); err != nil {
-			return contracts.Identity{}, err
+			return fail(err)
 		}
 		items := decodeAgents(created)
 		if len(items) > 0 {
-			userKey = firstNonEmpty(items[0].UserKey, items[0].ID)
+			userKey = firstNonEmpty(items[0].UserKey, items[0].KeyValue, items[0].DefaultUserKey)
+			if id := opaqueEntityID(items[0]); id != "" {
+				provision.add("user-key", id, userID, "")
+			}
 		}
 	}
-	team, err := c.ensureNamed(ctx, "/v3/meta/team/list", "/v3/meta/team/create", "name", spec.TeamName, map[string]any{"user_id": userID})
-	if err != nil {
-		return contracts.Identity{}, err
+	if userKey == "" {
+		return fail(errors.New("Tencent user-key create returned no user key"))
 	}
-	return contracts.Identity{UserID: userID, UserKey: userKey, TeamID: team.ID, TeamName: spec.TeamName, ServiceID: firstNonEmpty(c.config.ServiceID, "default"), Endpoint: c.config.Endpoint, HubEndpoint: c.config.HubEndpoint}, nil
+	ownerClient := c.withUserKey(userKey)
+	team, created, err := ownerClient.ensureNamedTrackedSplit(ctx, "/v3/meta/team/list", "/v3/meta/team/create", "name", spec.TeamName, map[string]any{"user_id": userID}, map[string]any{"owner_user_id": userID})
+	if err != nil {
+		return fail(err)
+	}
+	if created {
+		if id := opaqueEntityID(team); id != "" {
+			provision.addWithClient("team", id, userID, team.ID, ownerClient)
+		} else {
+			return fail(errors.New("Tencent team create returned no opaque rollback ID"))
+		}
+	}
+	return contracts.Identity{UserID: userID, UserKey: userKey, TeamID: team.ID, TeamName: spec.TeamName, ServiceID: firstNonEmpty(c.config.ServiceID, "default"), Endpoint: c.config.Endpoint, HubEndpoint: c.config.HubEndpoint}, provision, nil
 }
 
 type namedEntity struct {
 	ID             string `json:"id"`
+	KeyID          string `json:"key_id"`
 	AgentID        string `json:"agent_id"`
 	TeamID         string `json:"team_id"`
 	UserID         string `json:"user_id"`
 	UserKey        string `json:"user_key"`
+	KeyValue       string `json:"key_value"`
 	DefaultUserKey string `json:"default_user_key"`
 	Name           string `json:"name"`
 	Username       string `json:"username"`
@@ -269,31 +435,55 @@ type namedEntity struct {
 }
 
 func (c *Client) ensureNamed(ctx context.Context, listPath, createPath, key, value string, extras ...map[string]any) (namedEntity, error) {
-	body := map[string]any{key: value}
-	for _, extra := range extras {
-		for extraKey, extraValue := range extra {
-			body[extraKey] = extraValue
-		}
-	}
+	entity, _, err := c.ensureNamedTracked(ctx, listPath, createPath, key, value, extras...)
+	return entity, err
+}
+
+func (c *Client) ensureNamedTracked(ctx context.Context, listPath, createPath, key, value string, extras ...map[string]any) (namedEntity, bool, error) {
+	mergedExtras := mergeNamedExtras(extras...)
+	return c.ensureNamedTrackedSplit(ctx, listPath, createPath, key, value, mergedExtras, mergedExtras)
+}
+
+func (c *Client) ensureNamedTrackedSplit(ctx context.Context, listPath, createPath, key, value string, listExtras, createExtras map[string]any) (namedEntity, bool, error) {
+	listBody := namedRequestBody(key, value, listExtras)
 	var response json.RawMessage
-	if err := c.do(ctx, http.MethodPost, listPath, body, &response); err != nil {
-		return namedEntity{}, err
+	if err := c.do(ctx, http.MethodPost, listPath, listBody, &response); err != nil {
+		return namedEntity{}, false, err
 	}
 	items := decodeAgents(response)
 	for _, item := range items {
 		if item.Name == value || item.Username == value || item.ID == value {
-			return item, nil
+			return item, false, nil
 		}
 	}
+	createBody := namedRequestBody(key, value, createExtras)
 	var created json.RawMessage
-	if err := c.do(ctx, http.MethodPost, createPath, body, &created); err != nil {
-		return namedEntity{}, err
+	if err := c.do(ctx, http.MethodPost, createPath, createBody, &created); err != nil {
+		return namedEntity{}, false, err
 	}
 	items = decodeAgents(created)
 	if len(items) == 0 {
-		return namedEntity{}, fmt.Errorf("Tencent %s returned no entity", createPath)
+		return namedEntity{}, false, fmt.Errorf("Tencent %s returned no entity", createPath)
 	}
-	return items[0], nil
+	return items[0], true, nil
+}
+
+func mergeNamedExtras(extras ...map[string]any) map[string]any {
+	merged := make(map[string]any)
+	for _, extra := range extras {
+		for key, value := range extra {
+			merged[key] = value
+		}
+	}
+	return merged
+}
+
+func namedRequestBody(key, value string, extras map[string]any) map[string]any {
+	body := map[string]any{key: value}
+	for extraKey, extraValue := range extras {
+		body[extraKey] = extraValue
+	}
+	return body
 }
 
 func validateIsolation(isolation contracts.IsolationContext) error {
@@ -307,17 +497,36 @@ func validateIsolation(isolation contracts.IsolationContext) error {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body any, target any) error {
-	if strings.TrimSpace(c.config.Endpoint) == "" {
+	return c.doEndpoint(ctx, c.config.Endpoint, method, path, body, target)
+}
+
+// doUnredacted is reserved for the auth/verify request, whose protocol
+// requires the user-key secret in the JSON body. The body is never logged and
+// all returned errors still pass through secret redaction.
+func (c *Client) doUnredacted(ctx context.Context, method, path string, body any, target any) error {
+	return c.doEndpointWithRedaction(ctx, c.config.Endpoint, method, path, body, target, false)
+}
+
+func (c *Client) doEndpoint(ctx context.Context, endpoint, method, path string, body any, target any) error {
+	return c.doEndpointWithRedaction(ctx, endpoint, method, path, body, target, true)
+}
+
+func (c *Client) doEndpointWithRedaction(ctx context.Context, endpoint, method, path string, body any, target any, redactBody bool) error {
+	if strings.TrimSpace(endpoint) == "" {
 		return errors.New("Tencent endpoint is not configured")
 	}
-	base, err := url.Parse(strings.TrimRight(c.config.Endpoint, "/"))
+	base, err := url.Parse(strings.TrimRight(endpoint, "/"))
 	if err != nil {
 		return fmt.Errorf("parse Tencent endpoint: %s", config.Redact(err.Error(), c.secretValues()))
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + path
 	var reader io.Reader
 	if body != nil {
-		data, err := json.Marshal(body)
+		requestBody := body
+		if redactBody {
+			requestBody = redactTencentValue(body, c.secretValues())
+		}
+		data, err := json.Marshal(requestBody)
 		if err != nil {
 			return err
 		}
@@ -350,7 +559,7 @@ func (c *Client) do(ctx context.Context, method, path string, body any, target a
 	}
 	response, err := httpClient.Do(request)
 	if err != nil {
-		return fmt.Errorf("Tencent request %s %s: %s", method, path, config.Redact(err.Error(), c.secretValues()))
+		return redactedWrappedError{message: fmt.Sprintf("Tencent request %s %s: %s", method, path, config.Redact(err.Error(), c.secretValues())), cause: err}
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, 4*1024*1024))
@@ -378,8 +587,55 @@ func (c *Client) do(ctx context.Context, method, path string, body any, target a
 	return nil
 }
 
+func redactTencentValue(value any, secrets []string) any {
+	switch typed := value.(type) {
+	case string:
+		return config.Redact(typed, secrets)
+	case json.RawMessage:
+		var decoded any
+		if json.Unmarshal(typed, &decoded) == nil {
+			data, _ := json.Marshal(redactTencentValue(decoded, secrets))
+			return json.RawMessage(data)
+		}
+		return json.RawMessage(config.Redact(string(typed), secrets))
+	case []byte:
+		return []byte(config.Redact(string(typed), secrets))
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			result[key] = redactTencentValue(item, secrets)
+		}
+		return result
+	case []any:
+		result := make([]any, len(typed))
+		for index, item := range typed {
+			result[index] = redactTencentValue(item, secrets)
+		}
+		return result
+	case []string:
+		result := make([]string, len(typed))
+		for index, item := range typed {
+			result[index] = config.Redact(item, secrets)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+// redactedWrappedError keeps errors.Is/As useful for bounded context
+// cancellation while returning only the redacted text to callers/logs.
+type redactedWrappedError struct {
+	message string
+	cause   error
+}
+
+func (e redactedWrappedError) Error() string { return e.message }
+func (e redactedWrappedError) Unwrap() error { return e.cause }
+
 func (c *Client) secretValues() []string {
-	return []string{c.config.UserKey, c.config.AdminKey, c.config.AuthToken}
+	values := []string{c.config.UserKey, c.config.AdminKey, c.config.AuthToken}
+	return append(values, c.config.Secrets...)
 }
 
 func nonZeroResponseCode(value any) bool {
@@ -402,6 +658,7 @@ func decodeRecords(data json.RawMessage, projectID string) []contracts.MemoryRec
 		Items    []contracts.MemoryRecord `json:"items"`
 		Records  []contracts.MemoryRecord `json:"records"`
 		Memories []contracts.MemoryRecord `json:"memories"`
+		Messages []contracts.MemoryRecord `json:"messages"`
 		Data     json.RawMessage          `json:"data"`
 	}
 	var direct []contracts.MemoryRecord
@@ -418,11 +675,15 @@ func decodeRecords(data json.RawMessage, projectID string) []contracts.MemoryRec
 	if len(items) == 0 {
 		items = envelope.Memories
 	}
+	if len(items) == 0 {
+		items = envelope.Messages
+	}
 	if len(items) == 0 && len(envelope.Data) > 0 {
 		var nested struct {
 			Items    []contracts.MemoryRecord `json:"items"`
 			Records  []contracts.MemoryRecord `json:"records"`
 			Memories []contracts.MemoryRecord `json:"memories"`
+			Messages []contracts.MemoryRecord `json:"messages"`
 		}
 		if json.Unmarshal(envelope.Data, &nested) == nil {
 			items = nested.Items
@@ -431,6 +692,9 @@ func decodeRecords(data json.RawMessage, projectID string) []contracts.MemoryRec
 			}
 			if len(items) == 0 {
 				items = nested.Memories
+			}
+			if len(items) == 0 {
+				items = nested.Messages
 			}
 		}
 	}
@@ -453,10 +717,12 @@ func decodeAgents(data json.RawMessage) []namedEntity {
 		Items          []namedEntity   `json:"items"`
 		Data           json.RawMessage `json:"data"`
 		ID             string          `json:"id"`
+		KeyID          string          `json:"key_id"`
 		AgentID        string          `json:"agent_id"`
 		TeamID         string          `json:"team_id"`
 		UserID         string          `json:"user_id"`
 		UserKey        string          `json:"user_key"`
+		KeyValue       string          `json:"key_value"`
 		DefaultUserKey string          `json:"default_user_key"`
 		Name           string          `json:"name"`
 		Username       string          `json:"username"`
@@ -480,21 +746,21 @@ func decodeAgents(data json.RawMessage) []namedEntity {
 			return normalizeEntities(nestedItems)
 		}
 		var nestedEntity namedEntity
-		if json.Unmarshal(envelope.Data, &nestedEntity) == nil && firstNonEmpty(nestedEntity.ID, nestedEntity.AgentID, nestedEntity.TeamID, nestedEntity.UserID, nestedEntity.UserKey, nestedEntity.DefaultUserKey) != "" {
-			nestedEntity.ID = firstNonEmpty(nestedEntity.ID, nestedEntity.AgentID, nestedEntity.TeamID, nestedEntity.UserID, nestedEntity.UserKey, nestedEntity.DefaultUserKey)
+		if json.Unmarshal(envelope.Data, &nestedEntity) == nil && firstNonEmpty(nestedEntity.ID, nestedEntity.KeyID, nestedEntity.AgentID, nestedEntity.TeamID, nestedEntity.UserID, nestedEntity.UserKey, nestedEntity.KeyValue, nestedEntity.DefaultUserKey) != "" {
+			nestedEntity.ID = firstNonEmpty(nestedEntity.ID, nestedEntity.KeyID, nestedEntity.AgentID, nestedEntity.TeamID, nestedEntity.UserID, nestedEntity.UserKey, nestedEntity.KeyValue, nestedEntity.DefaultUserKey)
 			return []namedEntity{nestedEntity}
 		}
 	}
-	id := firstNonEmpty(envelope.ID, envelope.AgentID, envelope.TeamID, envelope.UserID, envelope.UserKey, envelope.DefaultUserKey)
+	id := firstNonEmpty(envelope.ID, envelope.KeyID, envelope.AgentID, envelope.TeamID, envelope.UserID, envelope.UserKey, envelope.KeyValue, envelope.DefaultUserKey)
 	if id == "" {
 		return nil
 	}
-	return []namedEntity{{ID: id, TeamID: envelope.TeamID, UserID: envelope.UserID, UserKey: envelope.UserKey, DefaultUserKey: envelope.DefaultUserKey, Name: envelope.Name, Username: envelope.Username, Description: envelope.Description}}
+	return []namedEntity{{ID: id, KeyID: envelope.KeyID, TeamID: envelope.TeamID, UserID: envelope.UserID, UserKey: envelope.UserKey, KeyValue: envelope.KeyValue, DefaultUserKey: envelope.DefaultUserKey, Name: envelope.Name, Username: envelope.Username, Description: envelope.Description}}
 }
 
 func normalizeEntities(items []namedEntity) []namedEntity {
 	for index := range items {
-		items[index].ID = firstNonEmpty(items[index].ID, items[index].AgentID, items[index].TeamID, items[index].UserID, items[index].UserKey, items[index].DefaultUserKey)
+		items[index].ID = firstNonEmpty(items[index].ID, items[index].KeyID, items[index].AgentID, items[index].TeamID, items[index].UserID, items[index].UserKey, items[index].KeyValue, items[index].DefaultUserKey)
 	}
 	return items
 }

@@ -1,0 +1,10 @@
+{
+  "name": "@baron-nexus/codex-adapter",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "index.js",
+  "bin": {"baron-codex-adapter": "index.js"},
+  "files": ["index.js", "index.ts", "README.md"],
+  "description": "Codex CLI lifecycle bridge for Baron Nexus"
+}

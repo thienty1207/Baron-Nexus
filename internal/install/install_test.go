@@ -1,12 +1,30 @@
 package install
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCodexProjectTrustedReadsPersistedProjectTrust(t *testing.T) {
+	codexHome := t.TempDir()
+	projectRoot := filepath.Join(t.TempDir(), "Baron project")
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", codexHome)
+	config := fmt.Sprintf("[projects.%q]\ntrust_level = \"trusted\"\n", projectRoot)
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !CodexProjectTrusted(projectRoot) {
+		t.Fatal("persisted Codex project trust should be recognized")
+	}
+}
 
 func TestCodexHookMergePreservesCustomConfigAndIsIdempotent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hooks.json")
@@ -86,6 +104,71 @@ func TestCodexHookMergeEmitsOfficialNestedCommandShape(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("official nested Baron command hook missing: %#v", groups)
+	}
+}
+
+func TestCodexHookInspectionSeparatesConfigurationFromInteractiveTrust(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	if err := MergeCodexHooks(path, "baron"); err != nil {
+		t.Fatal(err)
+	}
+	inspection, err := InspectCodexHooks(path, "baron")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.State != CodexHooksApprovalNeeded || !inspection.ApprovalRequired || len(inspection.MissingEvents) != 0 {
+		t.Fatalf("hook inspection conflated config with trust: %#v", inspection)
+	}
+	if !strings.Contains(CodexHookApprovalInstruction, "approve") || !strings.Contains(CodexHookApprovalInstruction, "baron test") {
+		t.Fatalf("approval instruction is not actionable: %s", CodexHookApprovalInstruction)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || strings.Contains(string(data), "sk-") {
+		t.Fatalf("hook inspection touched unsafe config: err=%v", err)
+	}
+}
+
+func TestInstallCodexUsesPinnedOfficialPackageAndVersion(t *testing.T) {
+	fixture := &codexInstallFixture{commandFixture: &commandFixture{
+		available: map[string]bool{"npm": true},
+		outputs:   map[string]string{"codex --version": "codex 0.149.0"},
+	}}
+	source, err := InstallCodexWithSource(context.Background(), fixture, "0.149.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "npm:@openai/codex" {
+		t.Fatalf("unexpected Codex install source: %s", source)
+	}
+	if len(fixture.calls) != 2 || fixture.calls[0] != "npm install --global @openai/codex@0.149.0" || fixture.calls[1] != "codex --version" {
+		t.Fatalf("Codex installer did not use the pinned official path: %#v", fixture.calls)
+	}
+}
+
+func TestInstallCodexReusesExistingPinnedBinaryWithoutNPM(t *testing.T) {
+	fixture := &commandFixture{
+		available: map[string]bool{"codex": true},
+		outputs:   map[string]string{"codex --version": "codex-cli 0.149.0"},
+	}
+	source, err := InstallCodexWithSource(context.Background(), fixture, "0.149.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "existing:codex" {
+		t.Fatalf("unexpected reused Codex source: %s", source)
+	}
+	if len(fixture.calls) != 1 || fixture.calls[0] != "codex --version" {
+		t.Fatalf("existing pinned Codex was not reused: %#v", fixture.calls)
+	}
+}
+
+func TestInstallCodexRejectsWrongVersionAfterNPMInstall(t *testing.T) {
+	fixture := &codexInstallFixture{commandFixture: &commandFixture{
+		available: map[string]bool{"npm": true},
+		outputs:   map[string]string{"codex --version": "codex 0.148.0"},
+	}}
+	if _, err := InstallCodexWithSource(context.Background(), fixture, "0.149.0"); err == nil || !strings.Contains(err.Error(), "0.149.0") {
+		t.Fatalf("wrong post-install Codex version was accepted: %v", err)
 	}
 }
 
@@ -171,6 +254,31 @@ func TestDSHProfilePatchPreservesUserRowsAndIsIdempotent(t *testing.T) {
 	}
 	if backups, _ := filepath.Glob(path + ".baron-backup-*"); len(backups) != 1 {
 		t.Fatalf("expected one backup before first edit, got %d", len(backups))
+	}
+}
+
+func TestDSHProfilePatchReplacesFreshEmptySequenceWithoutCreatingInvalidYAML(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "profiles", "web", "cordis.patch.yml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("# DSH default patch header\n[]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureDSHProfilePatch(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if strings.Contains(text, "[]\n# baron-owned") || !strings.Contains(text, "# DSH default patch header") || !strings.Contains(text, "# baron-owned: ddg-search") {
+		t.Fatalf("fresh DSH empty sequence was not normalized: %s", text)
+	}
+	if strings.Count(text, "- insert:") != 1 {
+		t.Fatalf("unexpected DSH patch rows: %s", text)
 	}
 }
 

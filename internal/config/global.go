@@ -18,6 +18,7 @@ type GlobalState struct {
 	DSHProfilePatchPath string                              `json:"dsh_profile_patch_path,omitempty"`
 	DSHComponents       map[string]bool                     `json:"dsh_components,omitempty"`
 	CodexHooksPath      string                              `json:"codex_hooks_path,omitempty"`
+	CodexAdapterPath    string                              `json:"codex_adapter_path,omitempty"`
 	CodexHooksInstalled bool                                `json:"codex_hooks_installed"`
 	TencentInstallPath  string                              `json:"tencent_install_path,omitempty"`
 	ProjectBindings     map[string]contracts.ProjectBinding `json:"project_bindings,omitempty"`

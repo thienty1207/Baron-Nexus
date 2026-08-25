@@ -86,7 +86,7 @@ func TestQueueIsDurableAndTransitionsExactlyOnce(t *testing.T) {
 	if err := store.RegisterProject(ctx, ProjectRecord{ProjectID: projectID, Root: "/tmp/q", Name: "queue"}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := store.EnqueueSync(ctx, QueueItem{ProjectID: projectID, IdempotencyKey: "memory-1", Payload: []byte("redacted")})
+	first, err := store.EnqueueSync(ctx, QueueItem{ProjectID: projectID, IdempotencyKey: "memory-1", Operation: QueueOperationWikiIngest, Payload: []byte("redacted")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +103,9 @@ func TestQueueIsDurableAndTransitionsExactlyOnce(t *testing.T) {
 	}
 	if len(due) != 1 {
 		t.Fatalf("expected one due queue item, got %d", len(due))
+	}
+	if due[0].Operation != QueueOperationWikiIngest {
+		t.Fatalf("typed queue operation was not durable: %#v", due[0])
 	}
 	if err := store.MarkDelivered(ctx, due[0].QueueID, "remote-1"); err != nil {
 		t.Fatal(err)
@@ -210,6 +213,98 @@ func TestConcurrentQueueClaimsSelectOneDeliveryOwner(t *testing.T) {
 	}
 }
 
+func TestStaleQueueClaimCanBeRecoveredWithoutTouchingActiveWork(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	projectID := "prj-queue-recovery-12345678"
+	if err := store.RegisterProject(ctx, ProjectRecord{ProjectID: projectID, Root: "/tmp/queue-recovery", Name: "queue-recovery"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"stale-1", "active-1"} {
+		if _, err := store.EnqueueSync(ctx, QueueItem{ProjectID: projectID, IdempotencyKey: key, Payload: []byte(`{"project_id":"prj-queue-recovery-12345678"}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	due, err := store.DueQueue(ctx, projectID, 10)
+	if err != nil || len(due) != 2 {
+		t.Fatalf("due queue=%#v err=%v", due, err)
+	}
+	for _, item := range due {
+		claimed, claimErr := store.ClaimQueue(ctx, item.QueueID)
+		if claimErr != nil || !claimed {
+			t.Fatalf("claim %s=%v err=%v", item.IdempotencyKey, claimed, claimErr)
+		}
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE sync_queue SET updated_at=? WHERE idempotency_key=?`, time.Now().UTC().Add(-2*time.Minute).Format(time.RFC3339Nano), "stale-1"); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.RecoverStaleQueueClaims(ctx, projectID, time.Now().UTC().Add(-time.Minute))
+	if err != nil || recovered != 1 {
+		t.Fatalf("recovered=%d err=%v", recovered, err)
+	}
+	items, err := store.ListQueue(ctx, projectID, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]string{}
+	for _, item := range items {
+		statuses[item.IdempotencyKey] = item.Status
+	}
+	if statuses["stale-1"] != "pending" || statuses["active-1"] != "sending" {
+		t.Fatalf("stale recovery touched the wrong lease: %#v", statuses)
+	}
+}
+
+func TestRequeueOversizedMemoryCapturesLeavesOtherDeadLettersUntouched(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	projectID := "prj-queue-repair-12345678"
+	if err := store.RegisterProject(ctx, ProjectRecord{ProjectID: projectID, Root: "/tmp/queue-repair", Name: "queue-repair"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"oversized", "poison"} {
+		if _, err := store.EnqueueSync(ctx, QueueItem{ProjectID: projectID, IdempotencyKey: key, Payload: []byte(`{"record":"preserve"}`)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := store.ListQueue(ctx, projectID, "pending", 10)
+	if err != nil || len(items) != 2 {
+		t.Fatalf("pending queue=%#v err=%v", items, err)
+	}
+	if err := store.MarkDeadLetter(ctx, items[0].QueueID, `Tencent request POST /v3/conversation/add failed with HTTP 400: {"message":"messages.0.content: Too big: expected string to have <=8192 characters"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkDeadLetter(ctx, items[1].QueueID, "invalid queued payload"); err != nil {
+		t.Fatal(err)
+	}
+	requeued, err := store.RequeueOversizedMemoryCaptures(ctx, projectID)
+	if err != nil || requeued != 1 {
+		t.Fatalf("requeued=%d err=%v", requeued, err)
+	}
+	remaining, err := store.ListQueue(ctx, projectID, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusByKey := map[string]QueueItem{}
+	for _, item := range remaining {
+		statusByKey[item.IdempotencyKey] = item
+	}
+	if statusByKey["oversized"].Status != "pending" || statusByKey["oversized"].Attempts != 0 || statusByKey["oversized"].LastError != "" {
+		t.Fatalf("oversized item was not reset for repair: %#v", statusByKey["oversized"])
+	}
+	if statusByKey["poison"].Status != "dead_letter" {
+		t.Fatalf("non-size dead letter was requeued: %#v", statusByKey["poison"])
+	}
+}
+
 func TestHandoffReceiptIsDurableAndProjectScoped(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -227,6 +322,46 @@ func TestHandoffReceiptIsDurableAndProjectScoped(t *testing.T) {
 	count, err := store.HandoffCount(ctx, projectID)
 	if err != nil || count != 1 {
 		t.Fatalf("handoff count=%d err=%v", count, err)
+	}
+}
+
+func TestKnowledgeRegistryIsDurableAndProjectScoped(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	projectID := "prj-knowledge-12345678"
+	if err := store.RegisterProject(ctx, ProjectRecord{ProjectID: projectID, Root: "/tmp/knowledge", Name: "knowledge"}); err != nil {
+		t.Fatal(err)
+	}
+	want := KnowledgeRegistry{
+		ProjectID: projectID, TeamID: "team-a", UserID: "user-a", AgentID: "agent-a",
+		WikiID: "wiki-a", CodeGraphID: "graph-a", WikiMetadataID: "meta-wiki",
+		CodeGraphMetadataID: "meta-graph", ServiceURL: "http://knowledge/v3",
+		Repository: "https://example.com/repo.git", Branch: "main", LastSyncCommit: "abc123",
+		WikiStatus: "ready", CodeGraphStatus: "ready", WikiIngestStatus: "ready",
+		CodeGraphSyncStatus: "ready", WikiIngestVersion: "wiki-v2", CodeGraphCommit: "abc123",
+		LastMemorySyncAt: time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC), ConflictStatus: "none", SupersededBy: "",
+		LastError: "",
+	}
+	if err := store.UpsertKnowledgeRegistry(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetKnowledgeRegistry(ctx, projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ProjectID != want.ProjectID || got.WikiID != want.WikiID || got.CodeGraphID != want.CodeGraphID || got.LastSyncCommit != want.LastSyncCommit || got.Repository != want.Repository || got.WikiIngestVersion != want.WikiIngestVersion || got.CodeGraphCommit != want.CodeGraphCommit || !got.LastMemorySyncAt.Equal(want.LastMemorySyncAt) || got.ConflictStatus != want.ConflictStatus {
+		t.Fatalf("registry round trip mismatch: got=%#v want=%#v", got, want)
+	}
+	if err := store.UpsertKnowledgeRegistry(ctx, KnowledgeRegistry{ProjectID: projectID, TeamID: "team-a", UserID: "user-a", AgentID: "agent-a", WikiID: "wiki-new"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.GetKnowledgeRegistry(ctx, projectID)
+	if err != nil || got.WikiID != "wiki-new" {
+		t.Fatalf("registry upsert did not replace mapping: got=%#v err=%v", got, err)
 	}
 }
 

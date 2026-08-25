@@ -1,4 +1,4 @@
-# Baron Shared Brain design
+# Baron Nexus design
 
 Status: frozen implementation design derived from `IMPLEMENT.pdf` (2026-08-23).
 
@@ -108,4 +108,3 @@ filesystem, Git fixtures, HTTP test servers, and fault injection where
 possible. External DSH/Codex/Tencent release-gate tests are classified as
 blocked when the required user-installed service, credential, or interactive
 login is unavailable; they are never marked PASS by a mock-only substitute.
-

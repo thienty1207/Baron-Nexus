@@ -28,8 +28,9 @@ func UpdateBinary(current, candidate string, validate func() error) (string, err
 	if currentErr != nil && !errors.Is(currentErr, os.ErrNotExist) {
 		return "", currentErr
 	}
-	backup := current + fmt.Sprintf(".baron-update-backup-%d", time.Now().UTC().UnixNano())
+	backup := ""
 	if hadCurrent {
+		backup = current + fmt.Sprintf(".baron-update-backup-%d", time.Now().UTC().UnixNano())
 		if err := copyBinary(current, backup, currentInfo.Mode().Perm()); err != nil {
 			return "", fmt.Errorf("backup current binary: %w", err)
 		}

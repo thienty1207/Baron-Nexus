@@ -1,4 +1,4 @@
-# Baron Shared Brain security scope
+# Baron Nexus security scope
 
 Baron handles project-local hook payloads, user-owned DSH/Codex configuration,
 Tencent user keys, local SQLite state, backup archives, and recalled external
@@ -14,4 +14,3 @@ the application root `.env`.
 Please report a reproducible vulnerability with the affected version, command,
 input, expected boundary, and sanitized reproduction. Do not include live
 credentials or private project contents.
-

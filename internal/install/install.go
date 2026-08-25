@@ -137,12 +137,32 @@ func EnsureDSHProfilePatch(path string) error {
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
+	// A freshly-created DSH profile uses a valid empty YAML sequence (`[]`)
+	// after its explanatory header. Appending a second sequence would create an
+	// invalid YAML document, so replace only that empty-list marker while
+	// preserving the user/header comments and any existing patch rows.
+	text = replaceEmptyDSHPatchSequence(text)
 	text += block
 	perm := os.FileMode(0o600)
 	if info, statErr := os.Stat(path); statErr == nil {
 		perm = info.Mode().Perm()
 	}
 	return config.AtomicWriteFile(path, []byte(text), perm)
+}
+
+func replaceEmptyDSHPatchSequence(text string) string {
+	lines := strings.Split(text, "\n")
+	for index := len(lines) - 1; index >= 0; index-- {
+		if strings.TrimSpace(lines[index]) == "" {
+			continue
+		}
+		if strings.TrimSpace(lines[index]) == "[]" {
+			lines = append(lines[:index], lines[index+1:]...)
+			return strings.Join(lines, "\n")
+		}
+		break
+	}
+	return text
 }
 
 func EnsureDSHBaseline(path string, options DSHOptions) (DSHReport, error) {

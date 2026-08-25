@@ -123,10 +123,13 @@ func (r *MemoryRecord) Normalize() {
 }
 
 type MemoryQuery struct {
-	Text  string
-	Limit int
-	Since time.Time
-	Kinds []string
+	Text         string
+	Limit        int
+	Since        time.Time
+	Kinds        []string
+	Files        []string
+	Symbols      []string
+	ScenarioPath string
 }
 
 type MemoryReceipt struct {
@@ -162,13 +165,14 @@ type IdentitySpec struct {
 }
 
 type Identity struct {
-	UserID      string
-	UserKey     string
-	TeamID      string
-	TeamName    string
-	Endpoint    string
-	HubEndpoint string
-	ServiceID   string
+	UserID            string
+	UserKey           string
+	TeamID            string
+	TeamName          string
+	Endpoint          string
+	HubEndpoint       string
+	KnowledgeEndpoint string
+	ServiceID         string
 }
 
 type ProjectBinding struct {

@@ -14,6 +14,15 @@ type fakeMemory struct {
 	err     error
 }
 
+type fakeKnowledge struct {
+	citations []KnowledgeCitation
+	err       error
+}
+
+func (k fakeKnowledge) Retrieve(context.Context, contracts.IsolationContext, contracts.MemoryQuery) ([]KnowledgeCitation, error) {
+	return k.citations, k.err
+}
+
 func (m fakeMemory) Health(context.Context) error { return m.err }
 func (m fakeMemory) EnsureIdentity(context.Context, contracts.IdentitySpec) (contracts.Identity, error) {
 	return contracts.Identity{}, nil
@@ -82,5 +91,46 @@ func TestContextPacketHonorsStrictCharacterBound(t *testing.T) {
 	}
 	if len(packet.Text) > 64 {
 		t.Fatalf("context exceeded bound: len=%d text=%q", len(packet.Text), packet.Text)
+	}
+}
+
+func TestContextPacketIncludesBoundedKnowledgeCitationsWithTrustLabels(t *testing.T) {
+	state := WorkState{ProjectID: "prj-a-12345678", Task: TaskState{Goal: "update auth"}}
+	packet, err := BuildContextWithKnowledge(context.Background(), state, nil, fakeKnowledge{citations: []KnowledgeCitation{{Source: "wiki", Reference: "docs/auth.md", Content: "refresh token flow", Trust: "historical-reference-only", Freshness: "commit-1"}}}, contracts.IsolationContext{ProjectID: state.ProjectID, TeamID: "team", AgentID: "agent", UserID: "user"}, contracts.MemoryQuery{Text: "auth"}, 1024, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(packet.Knowledge) != 1 || !strings.Contains(packet.Text, "Knowledge [wiki") || !strings.Contains(packet.Text, "docs/auth.md") || !strings.Contains(packet.Text, "historical-reference-only") {
+		t.Fatalf("knowledge citation was not labeled in context: %#v", packet)
+	}
+}
+
+func TestKnowledgeOutageKeepsLocalContextAndDoesNotClaimFreshness(t *testing.T) {
+	state := WorkState{ProjectID: "prj-a-12345678", Task: TaskState{Goal: "continue offline"}}
+	packet, err := BuildContextWithKnowledge(context.Background(), state, nil, fakeKnowledge{err: errors.New("service unavailable")}, contracts.IsolationContext{ProjectID: state.ProjectID, TeamID: "team", AgentID: "agent", UserID: "user"}, contracts.MemoryQuery{Text: "offline"}, 1024, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packet.RemoteError == "" || !strings.Contains(packet.Text, "continue offline") || strings.Contains(packet.Text, "verified current") {
+		t.Fatalf("knowledge outage violated fail-open trust contract: %#v", packet)
+	}
+}
+
+func TestStaleKnowledgeStatusRemainsHistoricalOnly(t *testing.T) {
+	state := WorkState{ProjectID: "prj-stale-12345678", Task: TaskState{Goal: "verify auth", CurrentStep: "run tests", NextAction: "inspect failure"}}
+	packet, err := BuildContextWithKnowledge(context.Background(), state, nil, fakeKnowledge{citations: []KnowledgeCitation{
+		{Source: "codegraph-status", Reference: "graph-1", Content: "CodeGraph status=pending", Trust: "historical-reference-only", Freshness: "stale"},
+		{Source: "wiki-status", Reference: "wiki-1", Content: "Wiki status=ready", Trust: "historical-reference-only", Freshness: "stale"},
+	}}, contracts.IsolationContext{ProjectID: state.ProjectID, TeamID: "team", AgentID: "agent", UserID: "user"}, contracts.MemoryQuery{Kinds: []string{"session_start"}}, 2048, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"trust=historical-reference-only", "freshness=stale", "Current repository/local continuity is authoritative."} {
+		if !strings.Contains(packet.Text, want) {
+			t.Fatalf("stale knowledge boundary missing %q: %s", want, packet.Text)
+		}
+	}
+	if strings.Contains(packet.Text, "current verified source") {
+		t.Fatalf("stale knowledge was presented as current evidence: %s", packet.Text)
 	}
 }

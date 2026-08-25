@@ -1,4 +1,4 @@
-# Baron Shared Brain repository outputs
+# Baron Nexus repository outputs
 /bin/
 /dist/
 /coverage/
@@ -29,4 +29,3 @@
 .baron/runtime/
 .baron/*.bak
 .baron/*.tmp
-

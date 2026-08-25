@@ -13,7 +13,7 @@ func TestGlobalStateIsAtomicAndSecretSafeInStandardConfigFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "baron", "global.json")
 	state := GlobalState{
 		Identity:      contracts.Identity{UserID: "usr-baron", UserKey: "sk-secret", TeamID: "team-baron", Endpoint: "http://127.0.0.1:8420"},
-		DSHComponents: map[string]bool{"baron-dsh-adapter": true}, CodexHooksInstalled: true,
+		DSHComponents: map[string]bool{"baron-dsh-adapter": true}, CodexHooksInstalled: true, CodexAdapterPath: "/tmp/baron/codex-adapter",
 	}
 	if err := SaveGlobalState(path, state); err != nil {
 		t.Fatal(err)
@@ -22,7 +22,7 @@ func TestGlobalStateIsAtomicAndSecretSafeInStandardConfigFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.Identity.TeamID != state.Identity.TeamID || !loaded.DSHComponents["baron-dsh-adapter"] {
+	if loaded.Identity.TeamID != state.Identity.TeamID || !loaded.DSHComponents["baron-dsh-adapter"] || loaded.CodexAdapterPath != state.CodexAdapterPath {
 		t.Fatalf("global state lost fields: %#v", loaded)
 	}
 	data, err := os.ReadFile(path)

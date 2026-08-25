@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/baron-shared-brain/baron/internal/install"
 )
 
 type fakeProbe struct {
@@ -58,13 +60,27 @@ func TestUnauthenticatedCodexNeverReadsOrPrintsAuthContents(t *testing.T) {
 	}
 }
 
+func TestMissingDSHProviderCredentialIsActionableWithoutSecretOutput(t *testing.T) {
+	probe := fakeProbe{commands: map[string]string{
+		"dsh": "/usr/bin/dsh", "dsh --version": "dsh 0.1.0",
+	}, errors: map[string]error{}}
+	report := Check(context.Background(), Options{Probe: probe, DSHProviderChecked: true, DSHProviderReady: false})
+	result := report.ByName("dsh-credentials")
+	if result.Status != StatusIncomplete || !strings.Contains(result.Suggestion, "DEEPSEEK_API_KEY") {
+		t.Fatalf("missing DSH credential was not actionable: %#v", result)
+	}
+	if strings.Contains(report.Human(), "sk-") {
+		t.Fatalf("credential diagnostic contained secret-shaped output: %s", report.Human())
+	}
+}
+
 func TestAllLocalFixtureComponentsGreenHasStableSuccessMessage(t *testing.T) {
 	probe := fakeProbe{commands: map[string]string{
 		"docker": "/usr/bin/docker", "docker info": "ok", "node": "/usr/bin/node", "node --version": "v22.19.0", "npm": "/usr/bin/npm", "npx": "/usr/bin/npx", "pnpm": "/usr/bin/pnpm", "uv": "/usr/bin/uv", "uvx": "/usr/bin/uvx", "dsh": "/usr/bin/dsh", "dsh --version": "dsh 0.1.0", "codex": "/usr/bin/codex", "codex --version": "codex 1.0.0",
 	}, errors: map[string]error{}}
 	report := Check(context.Background(), Options{Probe: probe, CodexAuthenticated: true, DSHComponents: map[string]bool{
 		"duckduckgo-search": true, "superpowers-dsh": true, "dsh-reverse-skill": true, "baron-dsh-adapter": true,
-	}, TencentReady: true})
+	}, DSHProviderChecked: true, DSHProviderReady: true, TencentReady: true})
 	if !report.Ready || report.ExitCode != 0 {
 		t.Fatalf("fixture not ready: %#v", report)
 	}
@@ -102,6 +118,45 @@ func TestUnsupportedNodeVersionIsActionable(t *testing.T) {
 	result := report.ByName("node")
 	if result.Status != StatusIncomplete || !strings.Contains(result.Suggestion, "22.19") {
 		t.Fatalf("unsupported Node version was not diagnosed: %#v", result)
+	}
+}
+
+func TestLinuxBootstrapDiagnosticsSeparatePackageManagerAndSudo(t *testing.T) {
+	probe := fakeProbe{commands: map[string]string{"docker": "/usr/bin/docker", "apt-get": "/usr/bin/apt-get", "sudo": "/usr/bin/sudo"}, errors: map[string]error{"docker info": errStopped, "sudo -n docker info": errStopped, "sudo -n true": errMissing}}
+	report := Check(context.Background(), Options{Probe: probe, LinuxBootstrap: true})
+	if result := report.ByName("docker-package-manager"); result.Status != StatusReady {
+		t.Fatalf("apt-get diagnostic=%#v", result)
+	}
+	if result := report.ByName("sudo"); result.Status != StatusIncomplete || !strings.Contains(result.Suggestion, "sudo -v") {
+		t.Fatalf("sudo diagnostic=%#v", result)
+	}
+}
+
+func TestConfiguredCodexHooksRequireExplicitInteractiveApproval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	if err := os.WriteFile(path, []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"baron hook codex SessionStart"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture intentionally contains only one event: doctor must report an
+	// incomplete configuration instead of claiming that trust was granted.
+	probe := fakeProbe{commands: map[string]string{"codex": "/usr/bin/codex", "codex --version": "codex 0.149.0"}, errors: map[string]error{}}
+	report := Check(context.Background(), Options{Probe: probe, CodexAuthenticated: true, CodexHooksPath: path})
+	result := report.ByName("codex-hooks")
+	if result.Status != StatusIncomplete || !strings.Contains(result.Suggestion, "baron codex-cli init") {
+		t.Fatalf("incomplete Codex hooks were not diagnosed: %#v", result)
+	}
+}
+
+func TestConfiguredCodexHooksAreReadyWhenProjectTrustIsPersisted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	if err := install.MergeCodexHooks(path, "baron"); err != nil {
+		t.Fatal(err)
+	}
+	probe := fakeProbe{commands: map[string]string{"codex": "/usr/bin/codex", "codex --version": "codex 0.149.0"}, errors: map[string]error{}}
+	report := Check(context.Background(), Options{Probe: probe, CodexAuthenticated: true, CodexHooksPath: path, CodexProjectTrusted: true})
+	result := report.ByName("codex-hooks")
+	if result.Status != StatusReady {
+		t.Fatalf("trusted Codex hooks were not accepted: %#v", result)
 	}
 }
 

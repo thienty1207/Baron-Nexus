@@ -1,8 +1,8 @@
-# Baron Shared Brain Implementation Plan
+# Baron Nexus Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-**Goal:** Implement the standalone Go Baron Shared Brain described by `IMPLEMENT.pdf`, including local continuity, Tencent memory routing, DSH/Codex integrations, recovery, isolation, and release evidence.
+**Goal:** Implement the standalone Go Baron Nexus described by `IMPLEMENT.pdf`, including local continuity, Tencent memory routing, DSH/Codex integrations, recovery, isolation, and release evidence.
 
 **Architecture:** A Cobra CLI and short-lived hook runtime sit over a Go core. SQLite WAL is the local authority; a `MemoryBackend` interface isolates Tencent HTTP behavior; project identity and isolation are centralized in `internal/project`; continuity and recovery are derived from event evidence and Git inspection.
 
@@ -71,4 +71,3 @@ the next begins and maps directly to the PDF identifiers.
 - [ ] P17-T01..P17-T10 and P17-TEST01..P17-TEST05
 - [ ] P18-T01..P18-T10 and P18-TEST01..P18-TEST06
 - [ ] P19-T01..P19-T16 and P19-TEST01..P19-TEST12
-

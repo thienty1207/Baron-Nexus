@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/baron-shared-brain/baron/internal/config"
+	"github.com/baron-shared-brain/baron/internal/install"
 )
 
 type Status string
@@ -88,16 +90,36 @@ func (OSProbe) Run(ctx context.Context, name string, args ...string) (string, er
 	return stringOutput(exec.CommandContext(ctx, name, args...))
 }
 
+// RunInteractive is used only for safe OS authentication preflights such as
+// `sudo -v`. The password is read by sudo from the user's terminal; Baron
+// never receives or persists it.
+func (OSProbe) RunInteractive(ctx context.Context, name string, args ...string) (string, error) {
+	command := exec.CommandContext(ctx, name, args...)
+	command.Stdin = os.Stdin
+	var output bytes.Buffer
+	command.Stdout = io.MultiWriter(os.Stdout, &output)
+	command.Stderr = io.MultiWriter(os.Stderr, &output)
+	err := command.Run()
+	return output.String(), err
+}
+
 type Options struct {
-	Probe              CommandProbe
-	DSHComponents      map[string]bool
-	CodexAuthenticated bool
-	TencentReady       bool
-	TencentEndpoint    string
-	HubEndpoint        string
-	ProxyEndpoint      string
-	CredentialPaths    []string
-	HTTPClient         *http.Client
+	Probe               CommandProbe
+	DSHComponents       map[string]bool
+	DSHProviderChecked  bool
+	DSHProviderReady    bool
+	CodexAuthenticated  bool
+	CodexProjectTrusted bool
+	TencentReady        bool
+	TencentEndpoint     string
+	HubEndpoint         string
+	KnowledgeEndpoint   string
+	ProxyEndpoint       string
+	CredentialPaths     []string
+	CodexHooksPath      string
+	SurfaceChecks       []CheckResult
+	HTTPClient          *http.Client
+	LinuxBootstrap      bool
 }
 
 func Check(ctx context.Context, options Options) Report {
@@ -113,9 +135,32 @@ func Check(ctx context.Context, options Options) Report {
 	} else {
 		add(CheckResult{Name: "docker-cli", Status: StatusReady, Message: "Docker CLI is installed."})
 		if _, err := options.Probe.Run(ctx, "docker", "info"); err != nil {
-			add(CheckResult{Name: "docker-daemon", Status: StatusUnavailable, Message: "Docker daemon is unavailable.", Suggestion: "start Docker, then rerun baron test"})
+			if _, sudoErr := options.Probe.LookPath("sudo"); sudoErr == nil {
+				if _, sudoDockerErr := options.Probe.Run(ctx, "sudo", "-n", "docker", "info"); sudoDockerErr == nil {
+					add(CheckResult{Name: "docker-daemon", Status: StatusReady, Message: "Docker daemon is reachable through sudo; Baron will manage it without changing docker-group membership."})
+				} else {
+					add(CheckResult{Name: "docker-daemon", Status: StatusUnavailable, Message: "Docker daemon is unavailable.", Suggestion: "start Docker, then rerun baron test"})
+				}
+			} else {
+				add(CheckResult{Name: "docker-daemon", Status: StatusUnavailable, Message: "Docker daemon is unavailable.", Suggestion: "start Docker, then rerun baron test"})
+			}
 		} else {
 			add(CheckResult{Name: "docker-daemon", Status: StatusReady, Message: "Docker daemon is reachable."})
+		}
+	}
+
+	if options.LinuxBootstrap {
+		if _, err := options.Probe.LookPath("apt-get"); err != nil {
+			add(CheckResult{Name: "docker-package-manager", Status: StatusMissing, Message: "apt-get is not available for the Ubuntu/Debian Docker bootstrap.", Suggestion: "install apt-get or use a supported Ubuntu/Debian release"})
+		} else {
+			add(CheckResult{Name: "docker-package-manager", Status: StatusReady, Message: "apt-get is available for the Ubuntu/Debian Docker bootstrap."})
+		}
+		if _, err := options.Probe.LookPath("sudo"); err != nil {
+			add(CheckResult{Name: "sudo", Status: StatusMissing, Message: "sudo is not installed; Baron cannot perform the Linux Docker bootstrap.", Suggestion: "install sudo or ask an administrator to run baron tencent-memory init"})
+		} else if _, err := options.Probe.Run(ctx, "sudo", "-n", "true"); err != nil {
+			add(CheckResult{Name: "sudo", Status: StatusIncomplete, Message: "sudo authorization is not cached for this terminal.", Suggestion: "run sudo -v in this terminal, then rerun baron tencent-memory init"})
+		} else {
+			add(CheckResult{Name: "sudo", Status: StatusReady, Message: "sudo authorization is available for system bootstrap."})
 		}
 	}
 
@@ -154,6 +199,13 @@ func Check(ctx context.Context, options Options) Report {
 			add(CheckResult{Name: name, Status: StatusIncomplete, Message: name + " is not verified.", Suggestion: "baron deepseek-harness init"})
 		}
 	}
+	if options.DSHProviderChecked {
+		if options.DSHProviderReady {
+			add(CheckResult{Name: "dsh-credentials", Status: StatusReady, Message: "DSH provider credential is configured through the supported credential path."})
+		} else {
+			add(CheckResult{Name: "dsh-credentials", Status: StatusIncomplete, Message: "DSH provider credential is not configured.", Suggestion: "baron deepseek-harness init (or set DEEPSEEK_API_KEY)"})
+		}
+	}
 
 	if _, err := options.Probe.LookPath("codex"); err != nil {
 		add(CheckResult{Name: "codex", Status: StatusMissing, Message: "Codex CLI is not installed.", Suggestion: "baron codex-cli init"})
@@ -168,6 +220,21 @@ func Check(ctx context.Context, options Options) Report {
 			add(CheckResult{Name: "codex-auth", Status: StatusReady, Message: "Codex authentication readiness is confirmed."})
 		} else {
 			add(CheckResult{Name: "codex-auth", Status: StatusIncomplete, Message: "Codex authentication is incomplete.", Suggestion: "run codex and complete ChatGPT sign-in"})
+		}
+		if options.CodexHooksPath != "" {
+			inspection, inspectErr := install.InspectCodexHooks(options.CodexHooksPath, "baron")
+			switch {
+			case inspectErr != nil:
+				add(CheckResult{Name: "codex-hooks", Status: StatusWarning, Message: "Codex hook configuration could not be inspected; no hook trust decision is inferred."})
+			case inspection.State == install.CodexHooksMissing:
+				add(CheckResult{Name: "codex-hooks", Status: StatusIncomplete, Message: "Baron Codex hooks are not installed.", Suggestion: "baron codex-cli init"})
+			case inspection.State == install.CodexHooksIncomplete:
+				add(CheckResult{Name: "codex-hooks", Status: StatusIncomplete, Message: "Baron Codex hook configuration is incomplete.", Suggestion: "baron codex-cli init"})
+			case options.CodexProjectTrusted:
+				add(CheckResult{Name: "codex-hooks", Status: StatusReady, Message: "Baron Codex hooks are configured and this project is trusted by Codex."})
+			default:
+				add(CheckResult{Name: "codex-hooks", Status: StatusWarning, Message: "Baron Codex hooks are configured, but interactive project trust/enablement cannot be proved from hooks.json alone.", Suggestion: install.CodexHookApprovalInstruction})
+			}
 		}
 	}
 
@@ -189,12 +256,22 @@ func Check(ctx context.Context, options Options) Report {
 			add(CheckResult{Name: "tencent-hub", Status: StatusUnavailable, Message: "Tencent MemoryHub is unavailable.", Suggestion: "baron tencent-memory init"})
 		}
 	}
+	if options.KnowledgeEndpoint != "" {
+		if healthCheck(ctx, options.HTTPClient, options.KnowledgeEndpoint) {
+			add(CheckResult{Name: "tencent-knowledge", Status: StatusReady, Message: "Tencent Knowledge Service is healthy."})
+		} else {
+			add(CheckResult{Name: "tencent-knowledge", Status: StatusUnavailable, Message: "Tencent Knowledge Service is unavailable.", Suggestion: "baron tencent-memory init"})
+		}
+	}
 	if options.ProxyEndpoint != "" {
 		if healthCheck(ctx, options.HTTPClient, options.ProxyEndpoint) {
 			add(CheckResult{Name: "tencent-proxy", Status: StatusReady, Message: "Tencent proxy is healthy."})
 		} else {
 			add(CheckResult{Name: "tencent-proxy", Status: StatusUnavailable, Message: "Tencent proxy is unavailable.", Suggestion: "baron tencent-memory init"})
 		}
+	}
+	for _, check := range options.SurfaceChecks {
+		add(check)
 	}
 	for _, path := range options.CredentialPaths {
 		private, permissionErr := config.IsPrivateFile(path)

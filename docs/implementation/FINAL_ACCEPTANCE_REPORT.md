@@ -1,13 +1,18 @@
-# Baron Shared Brain — Final Acceptance Report
+# Baron Nexus — Final Acceptance Report
 
 ## Candidate
 
-- Source revision: `19d6e6e2bdf9597efbe5b488eaff42ff4a26b7c6`
-- Version: `0.1.0`
+- Source revision: `working-tree` for the final reviewed source before publication.
+- Working tree: final release candidate; the source and documentation are
+  committed separately after this verification record is updated.
+- Version: `0.1.0`.
 - Toolchain: `go1.27.0 linux/amd64`
-- Release directory: `/tmp/baron-release.candidate.ju8tHW`
-- Linux SHA-256: `0727fc0ccc85b0fef2557bb984ce4c6d94ebfb5289f2ed614197179dd31f1058`
-- Windows SHA-256: `48e799b13e35e66616e891ba88c75f3c8f24f066efb212e87a6344f388828aa6`
+- Release directory: `/tmp/baron-release-0.1.0.final.O1bDqT`
+- Linux SHA-256: `8fbc179b171553bcb4b4dcb3b26b3f4cf0d98b0d399e63e6f9024decc8f67cb3`
+- Windows SHA-256: `1233a5a39676a427e5ddd39c8e522c04e5b8795a5f12d7005530db790381031c`
+- Release manifest SHA-256: `a440adc11b9f183d1d54f8e848002a3f8acbd55c0a2570333d9d2ba032e1582d`
+- Toolchain file SHA-256: `76227025cc0bc2be7067aa45d11e09cacfd49c58f498f4c2e4f6a9872a607bf9`
+- SBOM SHA-256: `a3e949d6f9cb2c9e3cfd72e346db408050a0530f8953f5aa6e382e777747f84c`
 
 ## Implemented surface
 
@@ -23,9 +28,50 @@
   project/team/agent/user isolation on remote requests.
 - Pinned DSH installation/profile integration, embedded Baron DSH adapter,
   DuckDuckGo MCP profile patch, official nested Codex hook shape, Tencent v3
-  client, identity provisioning, and managed deployment bootstrap code.
+  client, identity provisioning, managed deployment bootstrap code, and hidden
+  provider-credential bootstrap through the official DSH/Tencent stores.
+- Ubuntu/Debian sudo-first Docker bootstrap, immutable Tencent deployment
+  manifests with container image digests, complete v3 Wiki/CodeGraph/Skill/
+  metadata clients, automatic project knowledge registry/provisioning, and
+  bounded cross-agent context retrieval.
+- Durable typed repair queues, stale-lease recovery after interrupted
+  processes, knowledge-aware backup/restore, expanded secret corpus checks,
+  and separate Wiki/CodeGraph/tools operational diagnostics.
+- Codex hook trust/configuration diagnostics with a tested CLI-only Desktop
+  boundary, opaque-ID-only Tencent identity compensation, controlled
+  child-process SIGKILL queue recovery, explicit safe restore replacement with
+  retained rollback copy, Windows installer ACL adaptation, and an explicit
+  Codex adapter bridge with a real interactive SessionStart/UserPromptSubmit
+  runtime smoke.
 - Linux amd64 and Windows amd64 CGO-free release artifacts, checksum manifest,
   module SBOM, shell/PowerShell installers, and update rollback logic.
+- Stable `baron 0.1.0` version output, verified GitHub release metadata and
+  SHA-256 download protocol, atomic Linux `baron install`/`baron update`,
+  idempotent update behavior, and staged Windows restart guidance.
+
+## Expansion phase checklist
+
+- P20 rebrand and compatibility lock: local gate PASS.
+- P21 Ubuntu/Debian bootstrap and sudo preflight: local gate PASS; Docker
+  Engine/Compose and `hello-world` were verified on the development host.
+- P4 live DSH initialization/profile repair, safe startup, and DuckDuckGo MCP
+  search: PASS. Interactive init now collects a missing DeepSeek key through
+  hidden input and writes DSH's official mode-0600 store; non-interactive init
+  fails before installation and reports the exact environment remediation.
+- P22 full Tencent deployment: managed health endpoints and live disposable
+  Agent/Wiki setup PASS after the real `owner_user_id` payload correction;
+  clean-machine sudo bootstrap, persistent-volume/restart, CodeGraph
+  completion, and authenticated release acceptance remain pending.
+- P23 full Tencent API/knowledge client: local gate PASS.
+- P24 automatic project knowledge provisioning: local gate PASS.
+- P25 DSH/Codex context orchestration: local gate PASS.
+- P26 reliability/security/migration: local queue, recovery, backup, secret,
+  concurrency, SIGKILL, and rollback evidence PASS; live Tencent outage
+  recovery also passed on a disposable project, while service restart and
+  clean-machine power-loss cases remain pending.
+- P27 release/documentation: local artifact and guidance evidence PASS; final
+  publication gate is implemented and correctly returns BLOCKED while the
+  external acceptance gates below remain unchecked.
 
 ## Verification evidence
 
@@ -41,8 +87,113 @@ The following commands passed from the repository root:
 - Linux artifact `--help` smoke test.
 - Isolated temporary-project smoke: `setup`, JSON `status`, Codex hook input,
   project-local state creation, and mode `0600` `.env`.
+- Isolated `baron codex-cli init` smoke reused the existing host
+  `codex-cli 0.149.0` without npm and materialized the Baron-owned adapter,
+  receipts, and official nested hook entries.
+- The Codex hook installer now targets the official `$CODEX_HOME/hooks.json`
+  path (default `~/.codex/hooks.json`); a real authenticated Codex v0.149.0
+  interactive PTY session executed `SessionStart` and `UserPromptSubmit` and
+  returned `CODEX_INTERACTIVE_CANONICAL_HOOK_SEEN` from a seeded Baron memory
+  sentinel. The prior `~/.config/codex/hooks.json` path was the cause of the
+  earlier false “hooks ready” result.
 - Installer SHA verification and refusal to overwrite an existing binary
   without `BARON_ALLOW_REPLACE=1` (exit 20).
+- `baron --version` exact-output smoke, local HTTP-fixture `baron install` and
+  `baron update` verification, checksum/manifest/version rejection before
+  mutation, and app-level proof that release operations do not touch project
+  or Tencent state.
+- `scripts/check-branding_test.sh`, `scripts/check-platform-guidance_test.sh`,
+  and `scripts/check-release-gate_test.sh`.
+- Fresh 2026-08-25 direct `scripts/check-dsh-adapter_test.sh` execution after
+  correcting its missing executable bit; the adapter test passed.
+- Fresh `docker compose --env-file docker/env.example config --quiet` passed
+  for the upstream Knowledge compose contract. Running that upstream file
+  without its documented env file correctly fails on required `PUBLIC_URL`;
+  this is not counted as a managed-stack pass. Direct Docker daemon access was
+  blocked by the current user's socket permissions and both non-interactive
+  sudo checks required authentication.
+- A fresh `baron tencent-memory init` rerun exited `0` through the designed
+  health-first idempotent path because all four endpoints were already healthy;
+  this is rerun evidence only and does not count as clean-machine bootstrap.
+- Fresh readiness output was intentionally incomplete in this terminal:
+  `baron test --json` returned `ready:false` and exit `12` for Docker daemon and
+  sudo, while the user-level DSH/Codex/Tencent surface checks remained ready.
+- A current-source regression test and real rebuilt-binary run proved that
+  `baron repair` skips Docker bootstrap/deployment when all four Tencent health
+  endpoints are already healthy, allowing Baron-owned queue repair without a
+  second sudo authorization. The current Wiki remains honestly
+  `processing`/local `pending` at Tencent, with ten raw seed entries, so no
+  asynchronous Wiki completion is claimed.
+- A fresh real DSH `0.1.1-rc.2` profile dump contained Superpowers, Reverse
+  Skill, Baron adapter, and DuckDuckGo markers; `dsh web --no-open` emitted a
+  local URL before its bounded timeout. A fresh race attempt failed at
+  `runtime/cgo` because `gcc` is absent.
+- Fresh DSH headless and bounded web-start probes passed, and a fresh Codex CLI
+  `exec` probe returned its exact sentinel in a disposable Baron project. The
+  project checkpoint ended `clean_closed`; the output itself was kept out of
+  this report to avoid copying session contents.
+- Fresh live disposable setup reached Wiki `ready` with zero pending/dead-letter
+  queue items when no Git remote was present. A separate Git-backed disposable
+  setup retained CodeGraph `processing`/`pending` after Tencent returned `409
+  busy`; no asynchronous operation was falsely marked ready.
+- The current candidate was rebuilt from this worktree after the canonical
+  Codex hook-path, legacy Tencent nested-source fallback, Knowledge batching,
+  queue-schema normalization, and automatic lifecycle retry fixes; its Linux
+  and Windows SHA-256 values are recorded above and its release checksum file
+  verifies both binaries, both installers, the manifest, toolchain metadata,
+  and the SBOM.
+- Live Tencent evidence covered two disposable projects. Repeated setup on
+  each reused its project binding; Project A and Project B had different
+  project IDs and Tencent Agent IDs, while both remained under the same Baron
+  team. Wiki status reached `ready` on both setups.
+- A real authenticated Codex/DSH CLI acceptance completed in Project A. The
+  installed Codex hook path produced a handoff context containing the prior
+  client, unfinished goal, failing test, task status, and safe next action; a
+  controlled Codex kill after `tool_finished` was recovered and rerun by DSH,
+  while a DSH `status=not_yet_verified` checkpoint was returned exactly by
+  real Codex. This is live CLI hook/data-plane evidence; the full interactive
+  DSH web workspace selection remains the external UI gate.
+- A real verified-completion ordering probe passed after the lifecycle fix:
+  Codex marked the task verified and cleanly closed, DSH headless took over,
+  returned the exact live sentinel without an interruption packet, and the
+  final local checkpoint remained `clean_closed`, `completed`, and
+  `completion_verified=true` even though DSH emitted its trailing final event
+  after clean-close.
+- A live capture/readback probe confirmed a Baron capture is readable through
+  Tencent L0 conversation query. The decoder now consumes Tencent's
+  `data.messages` conversation envelope. Baron also now treats Tencent
+  `scenario/read` as path-addressed and only sends it when `ScenarioPath` is
+  supplied, preventing a generic recall from becoming a false outage.
+- A live current-project setup reproduced Tencent Knowledge's legacy nested
+  raw-source `ENOENT`; Baron retried only that known failure with flat aliases,
+  and `wiki/raw/ls` then confirmed all ten bounded seed files were uploaded.
+  The rebuilt client also batches the service's ten-file limit, and a real
+  lifecycle hook drained the previously pending Wiki/core/scenario queue
+  without manual SQLite edits: `pending_queue=0`, `dead_letter_queue=0`, Wiki
+  and ingest `ready`. A missing L2 Scenario file now falls back to L0 instead
+  of retrying permanently. This repository has no verified Git remote, so its
+  local CodeGraph state remains correctly deferred.
+- A real Git-backed disposable project then exercised the Tencent CodeGraph
+  status endpoint. The first request was rejected because that upstream route
+  accepts only `code_graph_id`; Baron now sends the narrow schema, the live
+  status check succeeds, and the actual asynchronous index remains visibly
+  `processing`/`pending` until Tencent completes it. No pending CodeGraph is
+  falsely reported as ready.
+- Live isolation evidence covered ten disposable projects: all ten project IDs
+  and all ten Tencent Agent IDs were unique, and a direct Project B query for a
+  Project A sentinel returned zero cross-project matches.
+- Live outage evidence disabled Tencent for a disposable project, captured a
+  Codex hook into the local queue, restored the endpoint, and flushed four
+  receipts with four unique idempotency keys. The final pending and
+  dead-letter counts were both zero; replaying the original event did not add a
+  second delivery.
+- Fault/concurrency evidence passed the controlled child-process SIGKILL and
+  abrupt-restart recovery fixtures. A live DSH tool was deliberately kept
+  running while a real Codex prompt interleaved on the same project; both
+  lifecycle streams were recorded, SQLite integrity remained `ok`, duplicate
+  idempotency keys were 0, and pending/dead-letter queue items were 0. A
+  separate watched Codex process was killed after its exit-23 tool result and
+  DSH recovered/reran the exact checkpoint command with exit 0.
 
 The release directory contains a static Linux ELF and a Windows PE32+ binary;
 the manifest embeds the candidate source revision above.
@@ -51,15 +202,51 @@ the manifest embeds the candidate source revision above.
 
 These are environment limitations, not converted mock passes:
 
-- Docker and the TencentDB Agent Memory stack are unavailable, so live
-  provisioning, health/auth, volume, and remote continuity gates did not run.
-- Node/npm/npx/pnpm, uv/uvx, DSH, DeepSeek credentials, and interactive Codex
-  authentication are unavailable, so real client/plugin/hook lifecycle gates
-  did not run.
-- Windows execution and PowerShell installer runtime checks are unavailable.
+- Docker is installed and the daemon/Compose smoke test passed on this Linux
+  host. The managed Tencent stack is healthy and a live disposable project
+  setup has completed; the current agent terminal has no cached sudo ticket,
+  so a fresh clean-machine `tencent-memory init`, volume/restart matrix, and
+  full remote continuity run were not forced past preflight.
+- In the 2026-08-25 agent terminal, `sudo -n docker info` and `sudo -n -v`
+  both returned `sudo: interactive authentication is required`; direct Docker
+  client access consequently returned a socket permission error. This is the
+  current external gate, not a release pass.
+- The same fresh run of `/home/ty/.local/bin/baron test --json` returned
+  `ready:false` and exit `12`; the rebuilt current-source artifact returned the
+  same result. Docker CLI, Node/npm/npx/uv/uvx, DSH, Codex auth/hooks, and the
+  four Tencent health surfaces were ready, while Docker daemon and sudo were
+  not.
+- The installed `/home/ty/.local/bin/baron` has a different hash from the
+  current-source release artifact. The requested installed-binary command was
+  run as requested; source-change validation and repair smoke used the rebuilt
+  artifact, without claiming the older installed binary included the fix.
+- The current project Wiki has ten raw seed entries but Tencent still returns
+  `status=processing` (version `6`); Baron keeps the local registry at
+  `pending`. This is an external asynchronous gate and is not marked complete.
+- The user-provided Linux terminal acceptance returned `ready:true` and
+  `exit_code:0` for `baron test --json`; Docker/sudo, DSH credentials, Codex
+  auth/hooks, and Tencent MemoryCore/Hub/Knowledge were all reported ready.
+- The user-installed Node/npm/npx/uv/uvx/DSH toolchain is available through
+  the NVM path. A real DSH init, profile repair, safe startup, and DuckDuckGo
+  MCP search completed; missing credentials are now collected or reported by
+  Baron without manual file editing. Headless DSH and authenticated Codex
+  command smokes plus both live CLI handoff directions pass; only the full web
+  workspace selection remains external.
+- Windows execution and PowerShell installer runtime checks are unavailable;
+  the repository only verifies that Windows guidance does not claim silent
+  Docker Desktop, WSL2, Ubuntu, or Tencent UI installation.
 - `go test -race ./...` cannot run: the default invocation requires cgo, and
   `CGO_ENABLED=1` fails because `gcc` is absent.
 
 ## Final status
 
 FINAL STATUS: BLOCKED
+
+Roadmap checklist completion is 399/428 (93.22%); implementation tasks are
+263/269 (97.77%) and mandatory phase tests are 128/151 (84.77%). These are
+transparent checklist percentages, not a release-readiness override.
+
+The local implementation and release evidence are ready for external
+acceptance, but this is not a public release decision until the remaining
+Tencent, authenticated DSH/Codex, clean-machine Ubuntu, and Windows runtime
+scenarios are executed and recorded in the roadmap.

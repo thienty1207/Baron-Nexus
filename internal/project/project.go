@@ -79,12 +79,13 @@ func Resolve(path string) (Project, error) {
 		UserID:    env["BARON_TENCENT_USER_ID"],
 	}
 	identity := contracts.Identity{
-		UserID:      env["BARON_TENCENT_USER_ID"],
-		UserKey:     env["BARON_TENCENT_USER_KEY"],
-		TeamID:      env["BARON_TENCENT_TEAM_ID"],
-		Endpoint:    env["BARON_TENCENT_ENDPOINT"],
-		HubEndpoint: env["BARON_TENCENT_HUB_ENDPOINT"],
-		ServiceID:   env["BARON_TENCENT_SERVICE_ID"],
+		UserID:            env["BARON_TENCENT_USER_ID"],
+		UserKey:           env["BARON_TENCENT_USER_KEY"],
+		TeamID:            env["BARON_TENCENT_TEAM_ID"],
+		Endpoint:          env["BARON_TENCENT_ENDPOINT"],
+		HubEndpoint:       env["BARON_TENCENT_HUB_ENDPOINT"],
+		KnowledgeEndpoint: env["BARON_TENCENT_KNOWLEDGE_ENDPOINT"],
+		ServiceID:         env["BARON_TENCENT_SERVICE_ID"],
 	}
 	return Project{Root: root, Metadata: metadata, ProjectID: metadata.ProjectID, EnvPath: envPath, Binding: binding, Identity: identity}, nil
 }
@@ -355,6 +356,9 @@ func applyIdentity(env map[string]string, identity contracts.Identity) {
 	if identity.HubEndpoint != "" {
 		env["BARON_TENCENT_HUB_ENDPOINT"] = identity.HubEndpoint
 	}
+	if identity.KnowledgeEndpoint != "" {
+		env["BARON_TENCENT_KNOWLEDGE_ENDPOINT"] = identity.KnowledgeEndpoint
+	}
 	if identity.ServiceID != "" {
 		env["BARON_TENCENT_SERVICE_ID"] = identity.ServiceID
 	}
@@ -376,7 +380,7 @@ func identityFromEnv(env map[string]string) contracts.Identity {
 	return contracts.Identity{
 		UserID: env["BARON_TENCENT_USER_ID"], UserKey: env["BARON_TENCENT_USER_KEY"],
 		TeamID: env["BARON_TENCENT_TEAM_ID"], Endpoint: env["BARON_TENCENT_ENDPOINT"],
-		HubEndpoint: env["BARON_TENCENT_HUB_ENDPOINT"], ServiceID: env["BARON_TENCENT_SERVICE_ID"],
+		HubEndpoint: env["BARON_TENCENT_HUB_ENDPOINT"], KnowledgeEndpoint: env["BARON_TENCENT_KNOWLEDGE_ENDPOINT"], ServiceID: env["BARON_TENCENT_SERVICE_ID"],
 	}
 }
 

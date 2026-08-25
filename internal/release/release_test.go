@@ -1,0 +1,208 @@
+package release
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+)
+
+func TestInstallLatestDownloadsVerifiesAndAtomicallyInstallsCandidate(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("fixture candidate is a Linux amd64 executable")
+	}
+	root := t.TempDir()
+	candidate := []byte("#!/bin/sh\necho 'baron 0.1.0'\n")
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.0","artifacts":["baron-linux-amd64"]}`)
+	sums := checksumLine(candidate, "baron-linux-amd64") + "\n" + checksumLine(manifest, "release-manifest.json") + "\n"
+	server := releaseFixtureServer(t, candidate, manifest, []byte(sums))
+	defer server.Close()
+
+	target := filepath.Join(root, "bin", "baron")
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("old Baron binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{
+		HTTPClient:    server.Client(),
+		APIBaseURL:    server.URL,
+		Repository:    "owner/repo",
+		GOOS:          "linux",
+		GOARCH:        "amd64",
+		AllowInsecure: true,
+	}
+	report, err := client.InstallLatest(context.Background(), target, "0.0.9", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Changed || report.Version != "0.1.0" {
+		t.Fatalf("report=%#v", report)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(candidate) {
+		t.Fatalf("installed candidate=%q", data)
+	}
+	if report.Rollback == "" {
+		t.Fatal("successful update did not report a rollback artifact")
+	}
+	if _, err := os.Stat(report.Rollback); err != nil {
+		t.Fatalf("rollback artifact missing: %v", err)
+	}
+}
+
+func TestInstallLatestIsIdempotentWhenCurrentVersionMatches(t *testing.T) {
+	candidate := []byte("candidate")
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.0","artifacts":["baron-linux-amd64"]}`)
+	sums := checksumLine(candidate, "baron-linux-amd64") + "\n" + checksumLine(manifest, "release-manifest.json") + "\n"
+	server := releaseFixtureServer(t, candidate, manifest, []byte(sums))
+	defer server.Close()
+	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
+	report, err := client.InstallLatest(context.Background(), filepath.Join(t.TempDir(), "baron"), "0.1.0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Changed || report.Version != "0.1.0" {
+		t.Fatalf("expected no-op report, got %#v", report)
+	}
+}
+
+func TestInstallLatestRejectsChecksumMismatchBeforeMutation(t *testing.T) {
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.0","artifacts":["baron-linux-amd64"]}`)
+	server := releaseFixtureServer(t, []byte("candidate"), manifest, []byte(strings.Repeat("0", 64)+"  baron-linux-amd64\n"+checksumLine(manifest, "release-manifest.json")+"\n"))
+	defer server.Close()
+	root := t.TempDir()
+	target := filepath.Join(root, "baron")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
+	if _, err := client.InstallLatest(context.Background(), target, "0.0.9", false); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("expected checksum error, got %v", err)
+	}
+	data, _ := os.ReadFile(target)
+	if string(data) != "old" {
+		t.Fatalf("target mutated after checksum failure: %q", data)
+	}
+}
+
+func TestInstallLatestRejectsManifestTagMismatch(t *testing.T) {
+	candidate := []byte("candidate")
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.0.8","artifacts":["baron-linux-amd64"]}`)
+	sums := checksumLine(candidate, "baron-linux-amd64") + "\n" + checksumLine(manifest, "release-manifest.json") + "\n"
+	server := releaseFixtureServer(t, candidate, manifest, []byte(sums))
+	defer server.Close()
+	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
+	if _, err := client.InstallLatest(context.Background(), filepath.Join(t.TempDir(), "baron"), "0.0.9", false); err == nil || !strings.Contains(err.Error(), "version") {
+		t.Fatalf("expected manifest version error, got %v", err)
+	}
+}
+
+func TestInstallLatestRejectsUnsupportedPlatform(t *testing.T) {
+	client := Client{HTTPClient: http.DefaultClient, APIBaseURL: "https://api.github.com", Repository: "owner/repo", GOOS: "darwin", GOARCH: "arm64"}
+	if _, err := client.InstallLatest(context.Background(), filepath.Join(t.TempDir(), "baron"), "0.0.9", false); err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("expected unsupported platform error, got %v", err)
+	}
+}
+
+func TestInstallLatestRejectsMissingCompatibleAsset(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/owner/repo/releases/latest" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"tag_name": "v0.1.0",
+			"assets": []map[string]string{
+				{"name": "release-manifest.json", "browser_download_url": "http://" + r.Host + "/manifest"},
+				{"name": "SHA256SUMS", "browser_download_url": "http://" + r.Host + "/sums"},
+			},
+		})
+	}))
+	defer server.Close()
+	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
+	if _, err := client.InstallLatest(context.Background(), filepath.Join(t.TempDir(), "baron"), "0.0.9", false); err == nil || !strings.Contains(err.Error(), "compatible asset") {
+		t.Fatalf("expected missing asset error, got %v", err)
+	}
+}
+
+func TestInstallLatestRejectsOversizedReleaseMetadata(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/repos/owner/repo/releases/latest" {
+			_, _ = w.Write([]byte(strings.Repeat("x", int(maxMetadataBytes)+1)))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
+	if _, err := client.InstallLatest(context.Background(), filepath.Join(t.TempDir(), "baron"), "0.0.9", false); err == nil || !strings.Contains(err.Error(), "safety limit") {
+		t.Fatalf("expected bounded metadata error, got %v", err)
+	}
+}
+
+func TestInstallLatestRejectsCandidateVersionBeforeMutation(t *testing.T) {
+	candidate := []byte("#!/bin/sh\necho 'baron 0.0.9'\n")
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.0","artifacts":["baron-linux-amd64"]}`)
+	sums := checksumLine(candidate, "baron-linux-amd64") + "\n" + checksumLine(manifest, "release-manifest.json") + "\n"
+	server := releaseFixtureServer(t, candidate, manifest, []byte(sums))
+	defer server.Close()
+	root := t.TempDir()
+	target := filepath.Join(root, "baron")
+	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
+	if _, err := client.InstallLatest(context.Background(), target, "0.0.9", false); err == nil || !strings.Contains(err.Error(), "candidate") {
+		t.Fatalf("expected candidate validation error, got %v", err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "old" {
+		t.Fatalf("target mutated after candidate validation failure: %q", data)
+	}
+}
+
+func releaseFixtureServer(t *testing.T, candidate, manifest, sums []byte) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/owner/repo/releases/latest":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"tag_name": "v0.1.0",
+				"assets": []map[string]string{
+					{"name": "baron-linux-amd64", "browser_download_url": "" + "http://" + r.Host + "/download/baron-linux-amd64"},
+					{"name": "release-manifest.json", "browser_download_url": "http://" + r.Host + "/download/release-manifest.json"},
+					{"name": "SHA256SUMS", "browser_download_url": "http://" + r.Host + "/download/SHA256SUMS"},
+				},
+			})
+		case "/download/baron-linux-amd64":
+			_, _ = w.Write(candidate)
+		case "/download/release-manifest.json":
+			_, _ = w.Write(manifest)
+		case "/download/SHA256SUMS":
+			_, _ = w.Write(sums)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+}
+
+func checksumLine(data []byte, name string) string {
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%s  %s", hex.EncodeToString(sum[:]), name)
+}

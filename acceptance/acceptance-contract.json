@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "project": "Baron Shared Brain",
+  "project": "Baron Nexus",
   "source": "IMPLEMENT.pdf",
   "go_baseline": {
     "language": "Go",
@@ -45,7 +45,7 @@
     "15":["P15-TEST01","P15-TEST02","P15-TEST03","P15-TEST04"],
     "16":["P16-TEST01","P16-TEST02","P16-TEST03","P16-TEST04"],
     "17":["P17-TEST01","P17-TEST02","P17-TEST03","P17-TEST04","P17-TEST05"],
-    "18":["P18-TEST01","P18-TEST02","P18-TEST03","P18-TEST04","P18-TEST05","P18-TEST06"],
+    "18":["P18-TEST01","P18-TEST02","P18-TEST03","P18-TEST04","P18-TEST05","P18-TEST06","P18-TEST07","P18-TEST08","P18-TEST09"],
     "19":["P19-TEST01","P19-TEST02","P19-TEST03","P19-TEST04","P19-TEST05","P19-TEST06","P19-TEST07","P19-TEST08","P19-TEST09","P19-TEST10","P19-TEST11","P19-TEST12"]
   },
   "final_acceptance": [
@@ -53,4 +53,3 @@
     "F13","F14","F15","F16","F17","F18","F19","F20","F21","F22","F23","F24"
   ]
 }
-
