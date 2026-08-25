@@ -70,7 +70,15 @@ func (a *App) installAndBootstrap(ctx context.Context) (string, error) {
 	}); err != nil {
 		return "", err
 	}
-	return releaseMessage + " Bootstrap complete.", nil
+	return bootstrapCompletionMessage(releaseMessage), nil
+}
+
+func bootstrapCompletionMessage(releaseMessage string) string {
+	message := releaseMessage + " Bootstrap complete."
+	if notice := codexLoginNotice(); notice != "" {
+		message += " ACTION REQUIRED: " + notice
+	}
+	return message
 }
 
 func (a *App) preflightBootstrap(ctx context.Context) error {

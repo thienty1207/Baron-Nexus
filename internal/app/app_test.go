@@ -207,11 +207,27 @@ func TestCodexAuthReadyAcceptsCodexHomeAuthFile(t *testing.T) {
 }
 
 func TestCodexInitPrintsOneTimeLoginNotice(t *testing.T) {
+	t.Setenv("BARON_CODEX_AUTH_READY", "")
+	t.Setenv("OPENAI_API_KEY", "")
+	t.Setenv("PATH", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("CODEX_HOME", t.TempDir())
 	application := New()
 	options := application.CLIOptions(io.Discard, io.Discard)
-	notice := options.InitNotice["codex-cli"]
+	notice := options.InitNoticeFunc["codex-cli"]()
 	if !strings.Contains(strings.ToLower(notice), "codex") || !strings.Contains(strings.ToLower(notice), "once") {
 		t.Fatalf("Codex one-time login notice=%q", notice)
+	}
+}
+
+func TestCodexInitOmitsLoginNoticeWhenCodexAuthExists(t *testing.T) {
+	t.Setenv("BARON_CODEX_AUTH_READY", "1")
+	t.Setenv("OPENAI_API_KEY", "")
+	application := New()
+	options := application.CLIOptions(io.Discard, io.Discard)
+	if notice := options.InitNoticeFunc["codex-cli"](); notice != "" {
+		t.Fatalf("authenticated Codex should not need a login notice: %q", notice)
 	}
 }
 

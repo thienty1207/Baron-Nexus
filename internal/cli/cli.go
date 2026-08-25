@@ -53,6 +53,7 @@ type Options struct {
 	Update             func() (string, error)
 	Init               map[string]func() error
 	InitNotice         map[string]string
+	InitNoticeFunc     map[string]func() string
 	Hook               func(client, event string, input io.Reader, output io.Writer) error
 }
 
@@ -225,7 +226,11 @@ func initCommand(name string, options Options, short string) *cobra.Command {
 				}
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s initialization complete.\n", name)
-			if notice := options.InitNotice[name]; notice != "" {
+			notice := options.InitNotice[name]
+			if options.InitNoticeFunc != nil && options.InitNoticeFunc[name] != nil {
+				notice = options.InitNoticeFunc[name]()
+			}
+			if notice != "" {
 				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "ACTION REQUIRED: %s\n", notice)
 			}
 			return nil
