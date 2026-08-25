@@ -2,15 +2,15 @@
 
 ## Candidate
 
-- Source revision: `working-tree` for the final reviewed source before publication.
-- Working tree: final release candidate; the source and documentation are
-  committed separately after this verification record is updated.
+- Source revision: `543f19a8a16557abaaa414f1a3af0ecc32806e6d`.
+- Working tree: final release candidate; user-local `.baron/` state remains
+  untracked and intentionally excluded from the release.
 - Version: `0.1.0`.
 - Toolchain: `go1.27.0 linux/amd64`
 - Release directory: `/tmp/baron-release-0.1.0.final.O1bDqT`
-- Linux SHA-256: `8fbc179b171553bcb4b4dcb3b26b3f4cf0d98b0d399e63e6f9024decc8f67cb3`
-- Windows SHA-256: `1233a5a39676a427e5ddd39c8e522c04e5b8795a5f12d7005530db790381031c`
-- Release manifest SHA-256: `a440adc11b9f183d1d54f8e848002a3f8acbd55c0a2570333d9d2ba032e1582d`
+- Linux SHA-256: `6d62098d5fe5c0a04d2f5669a45cb6bd97552eba2d71c573c64d58ba424beb0e`
+- Windows SHA-256: `40fb8ff2a0397c87c8f3178012be8df8846060b96e1b1a6a8df9a7d04353c23d`
+- Release manifest SHA-256: `398535ace002d5fa1bdf8e8d8938d540a7fda5c4d0dc7aa7beb2d178be906767`
 - Toolchain file SHA-256: `76227025cc0bc2be7067aa45d11e09cacfd49c58f498f4c2e4f6a9872a607bf9`
 - SBOM SHA-256: `a3e949d6f9cb2c9e3cfd72e346db408050a0530f8953f5aa6e382e777747f84c`
 
@@ -216,10 +216,15 @@ These are environment limitations, not converted mock passes:
   same result. Docker CLI, Node/npm/npx/uv/uvx, DSH, Codex auth/hooks, and the
   four Tencent health surfaces were ready, while Docker daemon and sudo were
   not.
-- The installed `/home/ty/.local/bin/baron` has a different hash from the
-  current-source release artifact. The requested installed-binary command was
-  run as requested; source-change validation and repair smoke used the rebuilt
-  artifact, without claiming the older installed binary included the fix.
+- The installed `/home/ty/.local/bin/baron` matches the rebuilt Linux release
+  artifact (`6d62098d5fe5c0a04d2f5669a45cb6bd97552eba2d71c573c64d58ba424beb0e`)
+  and reports `baron 0.1.0`.
+- In disposable `/home/ty/project-test`, real DSH, Codex, and Tencent init plus
+  `baron setup` and `baron repair` completed. The project status ended with
+  Wiki `ready`, zero pending/dead-letter queue items, and honest CodeGraph
+  `local_only` because no verified Git remote exists. A real Codex CLI exec
+  returned `CODEX_NEXUS_PROJECT_TEST_OK`; the eight Baron hooks were migrated
+  to the Codex-supported three-second timeout without the prior clamp warning.
 - The current project Wiki has ten raw seed entries but Tencent still returns
   `status=processing` (version `6`); Baron keeps the local registry at
   `pending`. This is an external asynchronous gate and is not marked complete.
