@@ -206,6 +206,15 @@ func TestCodexAuthReadyAcceptsCodexHomeAuthFile(t *testing.T) {
 	}
 }
 
+func TestCodexInitPrintsOneTimeLoginNotice(t *testing.T) {
+	application := New()
+	options := application.CLIOptions(io.Discard, io.Discard)
+	notice := options.InitNotice["codex-cli"]
+	if !strings.Contains(strings.ToLower(notice), "codex") || !strings.Contains(strings.ToLower(notice), "once") {
+		t.Fatalf("Codex one-time login notice=%q", notice)
+	}
+}
+
 func TestCodexTrustProjectRootFallsBackToCurrentDirectory(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)

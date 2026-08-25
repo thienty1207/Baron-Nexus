@@ -78,6 +78,9 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 			"codex-cli":        func() error { return classifyError(a.CodexInit()) },
 			"tencent-memory":   func() error { return classifyError(a.TencentInit(context.Background())) },
 		},
+		InitNotice: map[string]string{
+			"codex-cli": "If Codex is not authenticated, run codex and complete ChatGPT sign-in once; Baron reuses Codex's global auth afterward.",
+		},
 	}
 }
 
