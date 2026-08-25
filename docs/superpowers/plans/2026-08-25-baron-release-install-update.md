@@ -104,6 +104,6 @@
 - [X] Run full Go tests, vet, CGO-free tests, release build, checksum verification, branding/platform/adapter/security scans, and release-gate tests.
 - [X] Run the binary smoke tests for `baron --version`, `baron install`, and `baron update` against a local HTTP fixture.
 - [X] Scan the complete staged tree for credentials and exclude `.baron` runtime/state/credential files.
-- [ ] Commit the source and documentation as Baron Nexus `0.1.0`.
+- [X] Commit the source and documentation as Baron Nexus `0.1.0` and create the local `v0.1.0` tag.
 - [ ] Add `https://github.com/thienty1207/Baron-Nexus.git` as `origin` and push the source branch/main plus `v0.1.0` tag only after verification.
 - [ ] Verify the remote commit/tag and report whether GitHub Actions created the release; do not claim public download/update until the release asset URLs are confirmed.
