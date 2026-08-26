@@ -208,7 +208,7 @@ func TestReadinessReportsRejectedProviderCredentialWithoutKeyMaterial(t *testing
 		t.Fatal(err)
 	}
 	check := report.ByName("dsh-credentials")
-	if check.Status != doctor.StatusIncomplete || check.Suggestion != "baron credentials set deepseek" {
+	if check.Status != doctor.StatusIncomplete || check.Suggestion != "baron deepseek api_key" {
 		t.Fatalf("rejected provider check=%#v", check)
 	}
 	if strings.Contains(report.Human(), "rejected-provider-key") {

@@ -86,7 +86,7 @@ publication remain blocked until those environments are available.
   OpenAI-compatible `/models` endpoint before DSH/Tencent persistence. Tencent
   admin-key input remains hidden, and diagnostics never include key material.
 - Rejected or unavailable candidates do not replace the existing DSH
-  credential or managed Tencent `.env`; `baron credentials set deepseek`
+  credential or managed Tencent `.env`; `baron deepseek api_key`
   performs explicit validated rotation and preserves unrelated managed values.
 - Ubuntu/Debian host bootstrap now installs/verifies Docker Engine/Compose,
   Node/npm/npx, pnpm, and checksum-verified uv/uvx after native sudo

@@ -143,7 +143,7 @@ and never prompts. To rotate a key later, run this once; it validates before
 updating the DSH store and any existing Baron-managed Tencent runtime env:
 
 ```text
-baron credentials set deepseek
+baron deepseek api_key
 ```
 
 For automation or CI, provide the provider key through the environment instead
@@ -158,8 +158,9 @@ baron tencent-memory init
 An exported `DEEPSEEK_API_KEY` takes precedence over the protected DSH
 credential file for that process and its child commands. To rotate the key
 interactively, unset that environment override first, then run
-`baron credentials set deepseek`; the command validates the replacement before
-updating the protected stores.
+`baron deepseek api_key`; the command validates the replacement before
+updating the protected stores. The older `baron credentials set deepseek`
+form remains available as a compatibility alias.
 
 `baron tencent-memory init` performs the Linux sudo preflight, installs/starts
 Docker on supported Ubuntu/Debian hosts, validates the provider key, fetches

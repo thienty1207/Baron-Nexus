@@ -19,11 +19,20 @@ func TestCLIExposesFrozenCommandSurface(t *testing.T) {
 	for _, text := range []string{
 		"deepseek-harness", "codex-cli", "tencent-memory", "test", "setup",
 		"status", "doctor", "repair", "backup", "restore", "install", "update",
-		"credentials",
+		"credentials", "deepseek",
 	} {
 		if !strings.Contains(out.String(), text) {
 			t.Fatalf("help missing %q:\n%s", text, out.String())
 		}
+	}
+	out.Reset()
+	nested := New(Options{Out: &out, Err: &out})
+	nested.SetArgs([]string{"deepseek", "--help"})
+	if err := nested.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "api_key") {
+		t.Fatalf("DeepSeek help missing api_key:\n%s", out.String())
 	}
 }
 
@@ -96,6 +105,24 @@ func TestCredentialsSetDeepseekInvokesRotationHandler(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "deepseek") {
 		t.Fatalf("rotation completion output missing provider: %s", out.String())
+	}
+}
+
+func TestDeepseekAPIKeyCommandInvokesRotationHandler(t *testing.T) {
+	var out bytes.Buffer
+	called := ""
+	if code := Run([]string{"deepseek", "api_key"}, Options{
+		Out: &out,
+		Err: &out,
+		SetCredential: func(provider string) error {
+			called = provider
+			return nil
+		},
+	}); code != ExitSuccess || called != "deepseek" {
+		t.Fatalf("code=%d provider=%q output=%s", code, called, out.String())
+	}
+	if !strings.Contains(out.String(), "deepseek") {
+		t.Fatalf("DeepSeek API-key completion output missing provider: %s", out.String())
 	}
 }
 

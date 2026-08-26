@@ -88,7 +88,10 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 	}
 }
 
-const codexLoginAction = "If Codex is not authenticated, run codex and complete ChatGPT sign-in once; Baron reuses Codex's global auth afterward."
+const (
+	codexLoginAction          = "If Codex is not authenticated, run codex and complete ChatGPT sign-in once; Baron reuses Codex's global auth afterward."
+	deepseekCredentialCommand = "baron deepseek api_key"
+)
 
 const releaseDownloadTimeout = 2 * time.Minute
 
@@ -209,7 +212,7 @@ func (a *App) readinessReport() (doctor.Report, error) {
 	dshKey, dshKeyErr := install.ReadDSHProviderKey(processEnvironment())
 	dshStatus := doctor.StatusIncomplete
 	dshMessage := "DSH provider credential is not configured."
-	dshSuggestion := "baron deepseek-harness init (or set DEEPSEEK_API_KEY)"
+	dshSuggestion := deepseekCredentialCommand + " (or set DEEPSEEK_API_KEY)"
 	if dshKeyErr != nil {
 		dshMessage = "DSH provider credential could not be read safely."
 	} else if dshKey != "" {
@@ -223,7 +226,7 @@ func (a *App) readinessReport() (doctor.Report, error) {
 			dshSuggestion = "restore provider connectivity, then rerun baron test"
 		} else {
 			dshMessage = "DSH provider credential was rejected by the provider."
-			dshSuggestion = "baron credentials set deepseek"
+			dshSuggestion = deepseekCredentialCommand
 		}
 	}
 	if check := a.tencentProviderCredentialCheck(context.Background(), global); check != nil {
@@ -273,7 +276,7 @@ func (a *App) tencentProviderCredentialCheck(ctx context.Context, global config.
 	} else if errors.Is(validationErr, credentials.ErrProviderUnavailable) {
 		return &doctor.CheckResult{Name: "tencent-provider-credential", Status: doctor.StatusUnavailable, Message: "Tencent provider credential could not be validated because the provider or network is unavailable.", Suggestion: "restore provider connectivity, then rerun baron test"}
 	}
-	return &doctor.CheckResult{Name: "tencent-provider-credential", Status: doctor.StatusIncomplete, Message: "Tencent provider credential was rejected by the provider.", Suggestion: "baron credentials set deepseek"}
+	return &doctor.CheckResult{Name: "tencent-provider-credential", Status: doctor.StatusIncomplete, Message: "Tencent provider credential was rejected by the provider.", Suggestion: deepseekCredentialCommand}
 }
 
 func codexTrustProjectRoot() string {
@@ -1256,19 +1259,19 @@ func (a *App) SetCredential(provider string) error {
 			if errors.Is(promptErr, credentials.ErrEmptyValue) {
 				continue
 			}
-			return credentialPromptFailure("DeepSeek", "DEEPSEEK_API_KEY", "baron credentials set deepseek", promptErr)
+			return credentialPromptFailure("DeepSeek", "DEEPSEEK_API_KEY", deepseekCredentialCommand, promptErr)
 		}
 		if validationErr := a.validateProviderCredential(context.Background(), baseURL, candidate); validationErr != nil {
 			if errors.Is(validationErr, credentials.ErrInvalidProviderCredential) {
 				continue
 			}
-			return credentialValidationFailure("DeepSeek", "baron credentials set deepseek", validationErr)
+			return credentialValidationFailure("DeepSeek", deepseekCredentialCommand, validationErr)
 		}
 		key = candidate
 		break
 	}
 	if key == "" {
-		return credentialValidationFailure("DeepSeek", "baron credentials set deepseek", credentials.ErrInvalidProviderCredential)
+		return credentialValidationFailure("DeepSeek", deepseekCredentialCommand, credentials.ErrInvalidProviderCredential)
 	}
 	if err := install.EnsureDSHProviderKey(values, key); err != nil {
 		return err
@@ -1336,7 +1339,7 @@ func credentialPromptFailure(component, environmentName, command string, err err
 
 func credentialValidationFailure(component, command string, err error) error {
 	if errors.Is(err, credentials.ErrInvalidProviderCredential) {
-		return providerValidationError{message: fmt.Sprintf("%s provider credential was rejected; rerun %s or use baron credentials set deepseek", component, command), cause: err}
+		return providerValidationError{message: fmt.Sprintf("%s provider credential was rejected; rerun %s or use %s", component, command, deepseekCredentialCommand), cause: err}
 	}
 	return providerValidationError{message: fmt.Sprintf("%s provider credential could not be validated; the provider or network is unavailable; rerun %s", component, command), cause: err}
 }

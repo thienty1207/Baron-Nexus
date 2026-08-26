@@ -26,7 +26,7 @@ function Set-BaronBinaryAcl {
 
 try {
   if ((Test-Path -LiteralPath $Destination) -and -not $AllowReplace) {
-    throw "Refusing to overwrite existing baron command at $Destination. Use -AllowReplace only for an explicit migration."
+    throw "Baron is already installed at $Destination. Run 'baron update' to update Baron or 'baron deepseek api_key' to change the DeepSeek API key. Do not rerun install.ps1; use -AllowReplace only for an explicit binary migration."
   }
   New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
   if (-not $BinarySource) {

@@ -44,7 +44,7 @@ case "$(uname -s)" in
 esac
 
 if [ -e "$DEST" ] && [ "${BARON_ALLOW_REPLACE:-0}" != "1" ]; then
-  printf '%s\n' "Refusing to overwrite existing baron command at $DEST; set BARON_ALLOW_REPLACE=1 only for an explicit migration." >&2
+  printf '%s\n' "Baron is already installed at $DEST. Run 'baron update' to update Baron or 'baron deepseek api_key' to change the DeepSeek API key. Do not rerun ./install.sh; set BARON_ALLOW_REPLACE=1 only for an explicit binary migration." >&2
   exit 20
 fi
 

@@ -51,9 +51,11 @@ receive truthful manual-prerequisite guidance.
   again. Existing rejected credentials trigger at most three interactive
   replacement attempts. The previous value remains untouched until a
   replacement validates.
-- `baron credentials set deepseek` is the explicit rotation command. It
+- `baron deepseek api_key` is the explicit rotation command. It
   validates first, atomically updates DSH's official credential store, and
   updates Baron-managed Tencent runtime key fields when that deployment exists.
+  The older `baron credentials set deepseek` spelling remains a compatibility
+  alias.
 - DeepSeek API-key entry is intentionally visible because the user explicitly
   requested full terminal echo on a trusted personal machine. The prompt warns
   about this. The entered value is never copied into Baron logs, JSON

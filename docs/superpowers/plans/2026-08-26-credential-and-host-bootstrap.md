@@ -21,7 +21,8 @@ diagnostics secret-safe.
 3. Add app tests proving an existing key is validated and reused, rejected keys
    do not overwrite the old store, a valid replacement is persisted, and the
    third failed attempt stops cleanly.
-4. Add CLI tests for `baron credentials set deepseek` and its usage errors.
+4. Add CLI tests for `baron deepseek api_key` and its usage errors; retain
+   `baron credentials set deepseek` as a compatibility alias.
 5. Add install tests for sudo reauthentication and Ubuntu/Debian toolchain
    ordering without running real package changes.
 6. Run the focused tests and confirm they fail for the missing behavior.
@@ -45,7 +46,7 @@ diagnostics secret-safe.
    preserve the old managed `.env` until the candidate is valid.
 3. Add readiness classification for rejected versus unavailable DSH provider
    credentials without printing key material. Keep `baron test` read-only.
-4. Add `baron credentials set deepseek`, atomically update the DSH store and
+4. Add `baron deepseek api_key`, atomically update the DSH store and
    managed Tencent API-key fields, and document environment override behavior.
 5. Add a safe replacement helper for existing Tencent managed env fields and
    ensure its backup/permission behavior is covered by tests.

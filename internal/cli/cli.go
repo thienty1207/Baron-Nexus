@@ -177,6 +177,13 @@ func New(options Options) *cobra.Command {
 	root.AddCommand(binaryCommand("install", "Download and install the latest verified Baron release.", options.Install))
 	root.AddCommand(binaryCommand("update", "Download and atomically update to the latest verified Baron release.", options.Update))
 
+	deepseekCommand := &cobra.Command{
+		Use:   "deepseek",
+		Short: "Configure the DeepSeek provider credential.",
+	}
+	deepseekCommand.AddCommand(credentialRotationCommand("api_key", "Validate and save the DeepSeek API key.", "deepseek", options))
+	root.AddCommand(deepseekCommand)
+
 	credentialsCommand := &cobra.Command{
 		Use:   "credentials",
 		Short: "Validate and rotate provider credentials.",
@@ -190,14 +197,7 @@ func New(options Options) *cobra.Command {
 			if provider != "deepseek" {
 				return &ExitError{Code: ExitUnsupportedUpstream, Err: fmt.Errorf("unsupported credential provider %q; only deepseek is supported", args[0])}
 			}
-			if options.SetCredential == nil {
-				return errors.New("credential rotation handler is not configured")
-			}
-			if err := options.SetCredential(provider); err != nil {
-				return err
-			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s credential update complete.\n", args[0])
-			return nil
+			return runCredentialRotation(cmd, options, provider)
 		},
 	}
 	credentialsCommand.AddCommand(credentialsSetCommand)
@@ -217,6 +217,28 @@ func New(options Options) *cobra.Command {
 	}
 	root.AddCommand(hook)
 	return root
+}
+
+func credentialRotationCommand(use, short, provider string, options Options) *cobra.Command {
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  exactArgs(0, use+" accepts no arguments"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCredentialRotation(cmd, options, provider)
+		},
+	}
+}
+
+func runCredentialRotation(cmd *cobra.Command, options Options, provider string) error {
+	if options.SetCredential == nil {
+		return errors.New("credential rotation handler is not configured")
+	}
+	if err := options.SetCredential(provider); err != nil {
+		return err
+	}
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s credential update complete.\n", provider)
+	return nil
 }
 
 func binaryCommand(name, short string, handler func() (string, error)) *cobra.Command {

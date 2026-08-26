@@ -27,4 +27,8 @@ for phrase in \
     exit 20
   fi
 done
+if ! rg -q --fixed-strings 'baron deepseek api_key' install.sh; then
+  printf '%s\n' 'install.sh must explain the canonical DeepSeek API-key rotation command when Baron is already installed.' >&2
+  exit 20
+fi
 printf '%s\n' 'Install sudo preflight contract passed.'
