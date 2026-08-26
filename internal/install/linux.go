@@ -24,8 +24,8 @@ type InteractiveCommandRunner interface {
 }
 
 // FileDownloader keeps the package/bootstrap policy testable. The default
-// implementation downloads only the official Docker repository key into a
-// user-owned temporary file; it never executes downloaded content.
+// implementation downloads official bootstrap inputs into a user-owned
+// temporary file; it never executes downloaded content.
 type FileDownloader interface {
 	Download(context.Context, string, string) error
 }
@@ -330,6 +330,8 @@ func firstNonEmptyLinux(values ...string) string {
 	return "unknown"
 }
 
+const maxHTTPDownloadBytes = 128 * 1024 * 1024
+
 type httpFileDownloader struct{}
 
 func (httpFileDownloader) Download(ctx context.Context, rawURL, destination string) error {
@@ -344,13 +346,13 @@ func (httpFileDownloader) Download(ctx context.Context, rawURL, destination stri
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return fmt.Errorf("Docker key download returned HTTP %d", response.StatusCode)
+		return fmt.Errorf("Baron download returned HTTP %d", response.StatusCode)
 	}
 	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
-	_, copyErr := io.Copy(file, io.LimitReader(response.Body, 2*1024*1024))
+	written, copyErr := io.Copy(file, io.LimitReader(response.Body, maxHTTPDownloadBytes+1))
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if copyErr != nil {
@@ -358,6 +360,9 @@ func (httpFileDownloader) Download(ctx context.Context, rawURL, destination stri
 	}
 	if syncErr != nil {
 		return syncErr
+	}
+	if written > maxHTTPDownloadBytes {
+		return fmt.Errorf("Baron download exceeds the %d-byte limit", maxHTTPDownloadBytes)
 	}
 	return closeErr
 }

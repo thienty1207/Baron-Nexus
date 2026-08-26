@@ -1,8 +1,11 @@
 package install
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,6 +63,28 @@ func writeOSRelease(t *testing.T, body string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestHTTPFileDownloaderDoesNotTruncateReleaseArchive(t *testing.T) {
+	payload := bytes.Repeat([]byte("uv"), 2*1024*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if _, err := writer.Write(payload); err != nil {
+			t.Errorf("write test payload: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	destination := filepath.Join(t.TempDir(), "uv.tar.gz")
+	if err := (httpFileDownloader{}).Download(context.Background(), server.URL, destination); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("downloaded archive size=%d, want %d", len(got), len(payload))
+	}
 }
 
 func TestEnsureDockerRejectsUnsupportedDistributionBeforeNetwork(t *testing.T) {
