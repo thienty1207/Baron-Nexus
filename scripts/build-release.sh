@@ -2,10 +2,14 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-GO_BIN=${GO_BIN:-/usr/local/go/bin/go}
+GO_BIN=${GO_BIN:-go}
 VERSION=${BARON_VERSION:-0.1.2}
 OUT=${BARON_RELEASE_DIR:-"$ROOT/dist/$VERSION"}
 SOURCE_REVISION=${BARON_SOURCE_REVISION:-unknown}
+if ! command -v "$GO_BIN" >/dev/null 2>&1 && [ ! -x "$GO_BIN" ]; then
+  printf '%s\n' "Go toolchain is not available through GO_BIN=$GO_BIN or PATH." >&2
+  exit 10
+fi
 if [ "$SOURCE_REVISION" = "unknown" ]; then
   SOURCE_REVISION=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)
   if [ -z "$SOURCE_REVISION" ]; then
