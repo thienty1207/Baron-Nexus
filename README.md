@@ -5,47 +5,75 @@ It records local work state first, routes bounded project memory to TencentDB
 Agent Memory, and lets either agent recover unfinished work without a Baron
 daemon.
 
-## Install and update Baron Nexus
+## Which command should you use?
 
-The first bootstrap downloads the verified native release. On Linux amd64:
+Baron has three different operations. `./install.sh` installs the command,
+`baron install` initializes the current project, and `baron update` only updates
+the installed command.
 
-```text
-curl -fsSL https://github.com/thienty1207/Baron-Nexus/releases/latest/download/install.sh -o /tmp/baron-install.sh
-sh /tmp/baron-install.sh
-export PATH="$HOME/.local/bin:$PATH"
-baron --version
-```
+### 1. First time on a machine: `./install.sh`
 
-The expected first release output is `baron 0.1.1`. The installer downloads the
-release manifest, SHA-256 list, and matching native binary before writing to
-`~/.local/bin/baron`; it refuses to replace an existing binary unless the
-replacement is explicit. Windows users can download `install.ps1` from the
-same release and run it with PowerShell.
-
-After Baron is installed, the binary can refresh itself from the verified
-GitHub release channel. `baron install` also runs the first-run runtime
-bootstrap for the current project; `baron update` remains binary-only:
-
-```text
-baron install
-baron update
-```
-
-`baron update` is idempotent when the installed version is already current.
-Both commands validate the release manifest, SHA-256, and candidate
-`baron --version` output before atomic replacement; a failed validation keeps
-the prior binary recoverable. They never overwrite project source, `.baron`
-identity, checkpoints, credentials, or Tencent state.
-
-## Quick start
-
-On Ubuntu/Debian, a new user needs only the verified source bootstrap, sudo
-authorization, and one project command:
+Run this once on a new machine. It downloads and verifies the native Baron
+binary into `~/.local/bin`; it does not initialize DSH, Codex, Tencent, or a
+project:
 
 ```text
 git clone https://github.com/thienty1207/Baron-Nexus.git
 cd Baron-Nexus
+sudo -v
 ./install.sh
+export PATH="$HOME/.local/bin:$PATH"
+baron --version
+```
+
+The expected output is `baron 0.1.1`. The installer verifies the release
+manifest and SHA-256 list before writing the binary. It refuses to replace an
+existing binary unless replacement is explicitly enabled. Windows users use
+the release's `install.ps1` with PowerShell after installing the documented
+Windows prerequisites.
+
+### 2. First time in a project: `baron install`
+
+After the command exists, run this once for each project. It verifies or
+refreshes the Baron binary, then bootstraps Docker (supported Ubuntu/Debian),
+DSH, Codex, Tencent, and the current project's Baron state:
+
+```text
+cd /path/to/project
+sudo -v
+baron install
+```
+
+The sequence is idempotent, so rerunning it repairs missing Baron-owned pieces
+without replacing project identity or user-owned agent configuration.
+
+### 3. Later version refresh: `baron update`
+
+Use this when a newer Baron release is available. It is binary-only: it does
+not run Docker, DSH, Codex, Tencent, or project setup, and the default
+`~/.local/bin` installation does not require sudo:
+
+```text
+baron update
+```
+
+`baron update` is idempotent when the installed version is already current.
+Both `baron install` and `baron update` validate the release manifest, SHA-256,
+and candidate `baron --version` output before atomic replacement; a failed
+validation keeps the prior binary recoverable. They never overwrite project
+source, `.baron` identity, checkpoints, credentials, or Tencent state.
+
+## Quick start (new Ubuntu/Debian machine)
+
+Quick start is only the combined example of the two first-time operations
+above; it is not a fourth command:
+
+```text
+git clone https://github.com/thienty1207/Baron-Nexus.git
+cd Baron-Nexus
+sudo -v
+./install.sh
+export PATH="$HOME/.local/bin:$PATH"
 cd /path/to/project
 sudo -v
 baron install
@@ -54,15 +82,10 @@ baron install
 `./install.sh` asks the native `sudo` program to authorize the operation before
 it downloads release metadata or the binary. Baron never receives, echoes, or
 stores the sudo password. If sudo is unavailable, the installer stops before
-network activity and prints the remediation. After the binary exists,
-run `sudo -v` in the same terminal immediately before `baron install` so the
-bootstrap has an active sudo authorization; Baron verifies it non-interactively
-and never reads the password. `baron install` then verifies the current release,
-preflights Docker, installs or repairs the supported Ubuntu/Debian Docker
-runtime, initializes DSH and Codex,
-starts the managed Tencent services, and runs `baron setup` for the current
-project. The sequence is idempotent, so rerunning it repairs missing Baron-owned
-pieces without replacing project identity or user-owned agent configuration.
+network activity and prints the remediation. After the binary exists, the
+second `sudo -v` in the same terminal gives `baron install` an active sudo
+authorization; Baron verifies it non-interactively and never reads the
+password. `baron install` then performs the project bootstrap described above.
 
 The initializer commands remain available separately for advanced repair:
 
