@@ -39,14 +39,15 @@ identity, checkpoints, credentials, or Tencent state.
 
 ## Quick start
 
-On Ubuntu/Debian, a new user needs only the verified source bootstrap and one
-project command:
+On Ubuntu/Debian, a new user needs only the verified source bootstrap, sudo
+authorization, and one project command:
 
 ```text
 git clone https://github.com/thienty1207/Baron-Nexus.git
 cd Baron-Nexus
 ./install.sh
 cd /path/to/project
+sudo -v
 baron install
 ```
 
@@ -54,8 +55,11 @@ baron install
 it downloads release metadata or the binary. Baron never receives, echoes, or
 stores the sudo password. If sudo is unavailable, the installer stops before
 network activity and prints the remediation. After the binary exists,
-`baron install` verifies the current release, preflights Docker, installs or
-repairs the supported Ubuntu/Debian Docker runtime, initializes DSH and Codex,
+run `sudo -v` in the same terminal immediately before `baron install` so the
+bootstrap has an active sudo authorization; Baron verifies it non-interactively
+and never reads the password. `baron install` then verifies the current release,
+preflights Docker, installs or repairs the supported Ubuntu/Debian Docker
+runtime, initializes DSH and Codex,
 starts the managed Tencent services, and runs `baron setup` for the current
 project. The sequence is idempotent, so rerunning it repairs missing Baron-owned
 pieces without replacing project identity or user-owned agent configuration.
