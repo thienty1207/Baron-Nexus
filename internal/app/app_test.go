@@ -433,15 +433,15 @@ func TestCLIOptionsUpdateUsesVerifiedReleaseWithoutProjectState(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old Baron binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	candidate := []byte("#!/bin/sh\necho 'baron 0.1.3'\n")
-	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.3","artifacts":["baron-linux-amd64"]}`)
+	candidate := []byte("#!/bin/sh\necho 'baron 0.1.4'\n")
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.4","artifacts":["baron-linux-amd64"]}`)
 	sum := sha256.Sum256(candidate)
 	sums := []byte(fmt.Sprintf("%s  baron-linux-amd64\n", hex.EncodeToString(sum[:])))
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/repos/owner/repo/releases/latest":
 			_ = json.NewEncoder(writer).Encode(map[string]any{
-				"tag_name": "v0.1.3",
+				"tag_name": "v0.1.4",
 				"assets": []map[string]string{
 					{"name": "baron-linux-amd64", "browser_download_url": "http://" + request.Host + "/download/baron-linux-amd64"},
 					{"name": "release-manifest.json", "browser_download_url": "http://" + request.Host + "/download/release-manifest.json"},

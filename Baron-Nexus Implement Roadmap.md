@@ -128,7 +128,7 @@ promote external acceptance items to `[X]`.
 | P17 | [X] | Local security, permission, redaction, tamper, bounded-output, and vet evidence complete. |
 | P18 | [ ] | Release artifacts, `baron --version`, verified `baron install/update`, and Linux installer smoke pass; public release and Windows runtime acceptance remain blocked. |
 | P19 | [ ] | Local implementation/report/evidence are current, but the full external release gate is not green. |
-| P20-P27 | [ ] | Baron Nexus expansion is locally implemented through P26; the public `v0.1.1` Linux release/download/update path is historical and the `v0.1.2` candidate carries the validated-credential/host-bootstrap changes, while P22 live Tencent and P27 clean-machine, authenticated-agent, first-installer, and Windows-runtime gates remain blocked. |
+| P20-P27 | [ ] | Baron Nexus expansion is locally implemented through P26; the public `v0.1.1` Linux release/download/update path and `v0.1.2` release are historical, while the `v0.1.3` candidate carries the concise DeepSeek key-rotation command and installer guidance; P22 live Tencent and P27 clean-machine, authenticated-agent, first-installer, and Windows-runtime gates remain blocked. |
 | P28 | [ ] | Credential validation, protected rotation, sudo reauthorization, and Ubuntu/Debian dependency bootstrap are implemented with local fixtures; clean-machine and real provider rotation acceptance remain open. |
 
 ## P0 — Baseline, contracts, and Go repository bootstrap `[X]`

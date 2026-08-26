@@ -1,6 +1,6 @@
 # Baron Nexus
 
-Current release: `0.1.2` — validated provider credentials and automated
+Current release: `0.1.3` — concise DeepSeek key rotation and automated
 Ubuntu/Debian first-install bootstrap.
 
 Baron Nexus is a native Go project continuity sidecar for DeepSeek Harness and Codex.
@@ -30,7 +30,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.2`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.3`. `sudo -v` must succeed before the first
 download. The installer verifies the release manifest and SHA-256 list before
 writing the binary, verifies the uv release checksum, refuses to replace an
 existing binary unless replacement is explicitly enabled, and never reads or
@@ -55,7 +55,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.2`. The PowerShell installer downloads the
+The expected output is `baron 0.1.3`. The PowerShell installer downloads the
 Windows amd64 release, verifies the release manifest and SHA-256 list, and
 installs it at `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
 If the current PowerShell session still cannot find `baron`, open a new

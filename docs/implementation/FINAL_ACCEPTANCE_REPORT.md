@@ -4,13 +4,14 @@
 
 - Historical source revision: `3d9e76961e2faaa63ee3b2cfaa5d8c3df9231036`
   (published `v0.1.1` release candidate with the public-download timeout fix).
-- Working tree: the `v0.1.2` release candidate plus the P28 implementation;
+- Working tree: the `v0.1.3` release candidate plus the P28 implementation and
+  the concise DeepSeek key command;
   user-local
   `.baron/` state remains untracked and intentionally excluded from the
   release.
-- Candidate version: `0.1.2`.
+- Candidate version: `0.1.3`.
 - The historical `v0.1.1` artifact hashes and directory remain in the dated
-  evidence below; the tagged `v0.1.2` workflow rebuilds artifacts from this
+  evidence below; the tagged `v0.1.3` workflow rebuilds artifacts from this
   candidate commit.
 - Toolchain: `go1.27.0 linux/amd64`
 - Historical `v0.1.1` release directory: `/tmp/baron-release-0.1.1.fixed.gOuFUD`
@@ -53,13 +54,15 @@
   runtime smoke.
 - Linux amd64 and Windows amd64 CGO-free release artifacts, checksum manifest,
   module SBOM, shell/PowerShell installers, and update rollback logic.
-- Stable `baron 0.1.2` version output, verified GitHub release metadata and
+- Stable `baron 0.1.3` version output, verified GitHub release metadata and
   SHA-256 download protocol, atomic Linux `baron install`/`baron update`,
   idempotent update behavior, and staged Windows restart guidance.
 - One-command `baron install` bootstrap coordinator: native host preflight,
   DSH, Codex, Tencent, and current-project setup in deterministic order, with
   visible validated DeepSeek input only when missing/rejected, hidden admin-key
   input, and reusable Codex auth.
+- Canonical `baron deepseek api_key` credential-rotation command, with the
+  older `baron credentials set deepseek` spelling retained as an alias.
 
 ## Expansion phase checklist
 

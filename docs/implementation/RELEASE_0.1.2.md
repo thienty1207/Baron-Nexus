@@ -8,7 +8,7 @@ first-install automation work from P28:
 - visible DeepSeek key entry with an explicit warning and live provider
   validation before persistence;
 - protected DSH/Tencent credential rotation through
-  `baron deepseek api_key` (with the old command retained as an alias);
+  `baron credentials set deepseek`;
 - sudo-first, bounded reauthorization for Go-managed system operations;
 - automatic Ubuntu/Debian installation of Docker Engine/Compose,
   Node/npm/npx, pnpm, and checksum-verified uv/uvx;
