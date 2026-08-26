@@ -108,6 +108,9 @@ type Options struct {
 	DSHComponents       map[string]bool
 	DSHProviderChecked  bool
 	DSHProviderReady    bool
+	DSHProviderStatus   Status
+	DSHProviderMessage  string
+	DSHProviderSuggest  string
 	CodexAuthenticated  bool
 	CodexProjectTrusted bool
 	TencentReady        bool
@@ -200,7 +203,13 @@ func Check(ctx context.Context, options Options) Report {
 		}
 	}
 	if options.DSHProviderChecked {
-		if options.DSHProviderReady {
+		if options.DSHProviderStatus != "" {
+			message := options.DSHProviderMessage
+			if message == "" {
+				message = "DSH provider credential is not ready."
+			}
+			add(CheckResult{Name: "dsh-credentials", Status: options.DSHProviderStatus, Message: message, Suggestion: options.DSHProviderSuggest})
+		} else if options.DSHProviderReady {
 			add(CheckResult{Name: "dsh-credentials", Status: StatusReady, Message: "DSH provider credential is configured through the supported credential path."})
 		} else {
 			add(CheckResult{Name: "dsh-credentials", Status: StatusIncomplete, Message: "DSH provider credential is not configured.", Suggestion: "baron deepseek-harness init (or set DEEPSEEK_API_KEY)"})

@@ -152,3 +152,32 @@ func TestEnsureTencentRuntimeEnvReportsMissingNamesWithoutSecretValues(t *testin
 		t.Fatalf("missing runtime configuration was not classified safely: %v", err)
 	}
 }
+
+func TestReplaceTencentRuntimeAPIKeyPreservesUnrelatedValuesAndCreatesBackup(t *testing.T) {
+	root := t.TempDir()
+	envPath := filepath.Join(root, ".env")
+	old := "MEMORY_LLM_API_KEY='old-key'\nPROXY_UPSTREAM_API_KEY='old-key'\nCUSTOM_VALUE=keep\n"
+	if err := os.WriteFile(envPath, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReplaceTencentRuntimeAPIKey(root, "new-key-value"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{"MEMORY_LLM_API_KEY='new-key-value'", "PROXY_UPSTREAM_API_KEY='new-key-value'", "CUSTOM_VALUE=keep"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("rotated env missing %q: %s", want, text)
+		}
+	}
+	if info, err := os.Stat(envPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("rotated env is not private: info=%v err=%v", info, err)
+	}
+	entries, err := filepath.Glob(envPath + ".baron-backup-*")
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("expected one recoverable env backup, entries=%v err=%v", entries, err)
+	}
+}

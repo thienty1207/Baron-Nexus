@@ -54,12 +54,19 @@ func runBootstrap(ctx context.Context, steps BootstrapSteps) error {
 }
 
 func (a *App) installAndBootstrap(ctx context.Context) (string, error) {
+	// Host authorization and dependency work must precede the release download
+	// as well as the DSH/Tencent downloads. The first-run coordinator is the
+	// only path that owns this ordering; individual `baron update` remains a
+	// binary-only operation.
+	if err := a.preflightBootstrap(ctx); err != nil {
+		return "", err
+	}
 	releaseMessage, err := a.installBaronBinary(true)
 	if err != nil {
 		return "", err
 	}
 	if err := runBootstrap(ctx, BootstrapSteps{
-		Preflight: a.preflightBootstrap,
+		Preflight: func(context.Context) error { return nil },
 		DSH:       a.DSHInit,
 		Codex:     a.CodexInit,
 		Tencent:   a.TencentInit,
@@ -84,6 +91,15 @@ func bootstrapCompletionMessage(releaseMessage string) string {
 func (a *App) preflightBootstrap(ctx context.Context) error {
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		return fmt.Errorf("automatic Baron bootstrap supports Linux and Windows only; detected %s", runtime.GOOS)
+	}
+	if runtime.GOOS == "linux" {
+		report, err := install.EnsureHostToolchain(ctx, a.commandRunner(), install.HostToolchainOptions{})
+		if err != nil {
+			return err
+		}
+		if !report.Ready {
+			return errors.New("host dependency preflight did not report a ready Node/pnpm/uv toolchain")
+		}
 	}
 	report, err := install.EnsureDocker(ctx, a.commandRunner(), install.DockerBootstrapOptions{})
 	if err != nil {

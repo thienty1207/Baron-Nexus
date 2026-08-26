@@ -23,6 +23,7 @@ import (
 	"github.com/baron-shared-brain/baron/internal/config"
 	"github.com/baron-shared-brain/baron/internal/continuity"
 	"github.com/baron-shared-brain/baron/internal/contracts"
+	"github.com/baron-shared-brain/baron/internal/credentials"
 	"github.com/baron-shared-brain/baron/internal/doctor"
 	"github.com/baron-shared-brain/baron/internal/install"
 	"github.com/baron-shared-brain/baron/internal/project"
@@ -67,6 +68,7 @@ func TestResolveDSHCredentialPromptsAndPersistsOfficialStore(t *testing.T) {
 	application.GlobalPath = filepath.Join(t.TempDir(), "global.json")
 	application.PromptOutput = &output
 	application.ReadSecret = func(io.Reader) ([]byte, error) { return []byte("  dsh-test-key\n"), nil }
+	application.ValidateProviderCredential = func(context.Context, string, string) error { return nil }
 
 	key, err := application.resolveDSHCredential()
 	if err != nil {
@@ -97,6 +99,7 @@ func TestResolveTencentRuntimeConfigReusesDSHKeyAndDefaultsWithoutPrompt(t *test
 	var output bytes.Buffer
 	application := New()
 	application.PromptOutput = &output
+	application.ValidateProviderCredential = func(context.Context, string, string) error { return nil }
 	application.ReadSecret = func(io.Reader) ([]byte, error) {
 		t.Fatal("Tencent resolver prompted despite a reusable DSH key")
 		return nil, nil
@@ -110,6 +113,132 @@ func TestResolveTencentRuntimeConfigReusesDSHKeyAndDefaultsWithoutPrompt(t *test
 	}
 	if output.Len() != 0 {
 		t.Fatalf("unexpected prompt output: %q", output.String())
+	}
+}
+
+func TestResolveDSHCredentialReplacesRejectedStoredKeyOnlyAfterValidation(t *testing.T) {
+	dshHome := t.TempDir()
+	t.Setenv("DSH_HOME", dshHome)
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	if err := install.EnsureDSHProviderKey(map[string]string{"DSH_HOME": dshHome}, "old-provider-key"); err != nil {
+		t.Fatal(err)
+	}
+	attempts := []string{"bad-key", "valid-provider-key"}
+	application := New()
+	application.GlobalPath = filepath.Join(t.TempDir(), "global.json")
+	application.ReadSecret = func(io.Reader) ([]byte, error) {
+		value := attempts[0]
+		attempts = attempts[1:]
+		return []byte(value), nil
+	}
+	application.ValidateProviderCredential = func(_ context.Context, _ string, key string) error {
+		if key == "old-provider-key" || key == "bad-key" {
+			return credentials.ErrInvalidProviderCredential
+		}
+		return nil
+	}
+	key, err := application.resolveDSHCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != "valid-provider-key" {
+		t.Fatalf("resolved key=%q", key)
+	}
+	stored, err := install.ReadDSHProviderKey(map[string]string{"DSH_HOME": dshHome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored != "valid-provider-key" {
+		t.Fatalf("stored key=%q, want validated replacement", stored)
+	}
+}
+
+func TestSetCredentialUpdatesDSHAndManagedTencentKeysAfterValidation(t *testing.T) {
+	dshHome := t.TempDir()
+	t.Setenv("DSH_HOME", dshHome)
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	deploymentRoot := filepath.Join(t.TempDir(), "tencent")
+	deployDir := filepath.Join(deploymentRoot, "deploy", "global-images")
+	if err := os.MkdirAll(deployDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, ".env"), []byte("MEMORY_LLM_BASE_URL='https://managed-provider.example/v1'\nMEMORY_LLM_API_KEY='old-provider-key'\nPROXY_UPSTREAM_API_KEY='old-provider-key'\nCUSTOM=keep\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	globalPath := filepath.Join(t.TempDir(), "global.json")
+	if err := config.SaveGlobalState(globalPath, config.GlobalState{TencentInstallPath: deploymentRoot}); err != nil {
+		t.Fatal(err)
+	}
+	application := New()
+	application.GlobalPath = globalPath
+	application.ReadSecret = func(io.Reader) ([]byte, error) { return []byte("new-provider-key"), nil }
+	validatedBaseURL := ""
+	application.ValidateProviderCredential = func(_ context.Context, baseURL, _ string) error {
+		validatedBaseURL = baseURL
+		return nil
+	}
+	if err := application.SetCredential("deepseek"); err != nil {
+		t.Fatal(err)
+	}
+	if validatedBaseURL != "https://managed-provider.example/v1" {
+		t.Fatalf("credential rotation used base URL %q, want managed provider URL", validatedBaseURL)
+	}
+	stored, err := install.ReadDSHProviderKey(map[string]string{"DSH_HOME": dshHome})
+	if err != nil || stored != "new-provider-key" {
+		t.Fatalf("DSH key=%q err=%v", stored, err)
+	}
+	envData, err := os.ReadFile(filepath.Join(deployDir, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(envData), "MEMORY_LLM_API_KEY='new-provider-key'") || !strings.Contains(string(envData), "PROXY_UPSTREAM_API_KEY='new-provider-key'") || !strings.Contains(string(envData), "CUSTOM=keep") {
+		t.Fatalf("managed Tencent key rotation was incomplete: %s", envData)
+	}
+}
+
+func TestReadinessReportsRejectedProviderCredentialWithoutKeyMaterial(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "rejected-provider-key")
+	application := New()
+	application.GlobalPath = filepath.Join(t.TempDir(), "global.json")
+	application.ValidateProviderCredential = func(context.Context, string, string) error {
+		return credentials.ErrInvalidProviderCredential
+	}
+	report, err := application.readinessReport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := report.ByName("dsh-credentials")
+	if check.Status != doctor.StatusIncomplete || check.Suggestion != "baron credentials set deepseek" {
+		t.Fatalf("rejected provider check=%#v", check)
+	}
+	if strings.Contains(report.Human(), "rejected-provider-key") {
+		t.Fatal("readiness output exposed provider key")
+	}
+}
+
+func TestReadinessReportsMissingTencentProviderCredential(t *testing.T) {
+	root := t.TempDir()
+	deployDir := filepath.Join(root, "deploy", "global-images")
+	if err := os.MkdirAll(deployDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, ".env"), []byte("MEMORY_LLM_BASE_URL='https://managed-provider.example/v1'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	globalPath := filepath.Join(t.TempDir(), "global.json")
+	if err := config.SaveGlobalState(globalPath, config.GlobalState{TencentInstallPath: root}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	application := New()
+	application.GlobalPath = globalPath
+	report, err := application.readinessReport()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := report.ByName("tencent-provider-credential")
+	if check.Status != doctor.StatusIncomplete || check.Suggestion != "baron tencent-memory init" {
+		t.Fatalf("missing Tencent provider check=%#v", check)
 	}
 }
 
@@ -304,15 +433,15 @@ func TestCLIOptionsUpdateUsesVerifiedReleaseWithoutProjectState(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old Baron binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	candidate := []byte("#!/bin/sh\necho 'baron 0.1.2'\n")
-	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.2","artifacts":["baron-linux-amd64"]}`)
+	candidate := []byte("#!/bin/sh\necho 'baron 0.1.3'\n")
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.3","artifacts":["baron-linux-amd64"]}`)
 	sum := sha256.Sum256(candidate)
 	sums := []byte(fmt.Sprintf("%s  baron-linux-amd64\n", hex.EncodeToString(sum[:])))
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/repos/owner/repo/releases/latest":
 			_ = json.NewEncoder(writer).Encode(map[string]any{
-				"tag_name": "v0.1.2",
+				"tag_name": "v0.1.3",
 				"assets": []map[string]string{
 					{"name": "baron-linux-amd64", "browser_download_url": "http://" + request.Host + "/download/baron-linux-amd64"},
 					{"name": "release-manifest.json", "browser_download_url": "http://" + request.Host + "/download/release-manifest.json"},

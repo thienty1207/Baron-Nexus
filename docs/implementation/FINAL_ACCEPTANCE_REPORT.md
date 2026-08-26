@@ -2,17 +2,23 @@
 
 ## Candidate
 
-- Source revision: `3d9e76961e2faaa63ee3b2cfaa5d8c3df9231036` (0.1.1 release candidate with the public-download timeout fix).
-- Working tree: final release candidate; user-local `.baron/` state remains
-  untracked and intentionally excluded from the release.
-- Version: `0.1.1`.
+- Historical source revision: `3d9e76961e2faaa63ee3b2cfaa5d8c3df9231036`
+  (published `v0.1.1` release candidate with the public-download timeout fix).
+- Working tree: the `v0.1.2` release candidate plus the P28 implementation;
+  user-local
+  `.baron/` state remains untracked and intentionally excluded from the
+  release.
+- Candidate version: `0.1.2`.
+- The historical `v0.1.1` artifact hashes and directory remain in the dated
+  evidence below; the tagged `v0.1.2` workflow rebuilds artifacts from this
+  candidate commit.
 - Toolchain: `go1.27.0 linux/amd64`
-- Release directory: `/tmp/baron-release-0.1.1.fixed.gOuFUD`
-- Linux SHA-256: `5ff679186e5c8c5f11c2a0d5698c7732d9fdb8d6ed961bf36a1fdb6802752d88`
-- Windows SHA-256: `da843103489c0eadf53bb34b536b8deb82e956b9262f08808bbab6116cb23b58`
-- Release manifest SHA-256: `357aa14268a4c540584e704fd15529b6958c689ac17555eb2146b365de8e398f`
-- Toolchain file SHA-256: `76227025cc0bc2be7067aa45d11e09cacfd49c58f498f4c2e4f6a9872a607bf9`
-- SBOM SHA-256: `a3e949d6f9cb2c9e3cfd72e346db408050a0530f8953f5aa6e382e777747f84c`
+- Historical `v0.1.1` release directory: `/tmp/baron-release-0.1.1.fixed.gOuFUD`
+- Historical `v0.1.1` Linux SHA-256: `5ff679186e5c8c5f11c2a0d5698c7732d9fdb8d6ed961bf36a1fdb6802752d88`
+- Historical `v0.1.1` Windows SHA-256: `da843103489c0eadf53bb34b536b8deb82e956b9262f08808bbab6116cb23b58`
+- Historical `v0.1.1` release manifest SHA-256: `357aa14268a4c540584e704fd15529b6958c689ac17555eb2146b365de8e398f`
+- Historical `v0.1.1` toolchain file SHA-256: `76227025cc0bc2be7067aa45d11e09cacfd49c58f498f4c2e4f6a9872a607bf9`
+- Historical `v0.1.1` SBOM SHA-256: `a3e949d6f9cb2c9e3cfd72e346db408050a0530f8953f5aa6e382e777747f84c`
 
 ## Implemented surface
 
@@ -28,8 +34,10 @@
   project/team/agent/user isolation on remote requests.
 - Pinned DSH installation/profile integration, embedded Baron DSH adapter,
   DuckDuckGo MCP profile patch, official nested Codex hook shape, Tencent v3
-  client, identity provisioning, managed deployment bootstrap code, and hidden
-  provider-credential bootstrap through the official DSH/Tencent stores.
+  client, identity provisioning, managed deployment bootstrap code, and
+  provider-credential bootstrap through the official DSH/Tencent stores. The
+  DeepSeek provider key is intentionally visible only while actively entered
+  in the trusted terminal; Tencent admin-key input remains hidden.
 - Ubuntu/Debian sudo-first Docker bootstrap, immutable Tencent deployment
   manifests with container image digests, complete v3 Wiki/CodeGraph/Skill/
   metadata clients, automatic project knowledge registry/provisioning, and
@@ -45,22 +53,25 @@
   runtime smoke.
 - Linux amd64 and Windows amd64 CGO-free release artifacts, checksum manifest,
   module SBOM, shell/PowerShell installers, and update rollback logic.
-- Stable `baron 0.1.1` version output, verified GitHub release metadata and
+- Stable `baron 0.1.2` version output, verified GitHub release metadata and
   SHA-256 download protocol, atomic Linux `baron install`/`baron update`,
   idempotent update behavior, and staged Windows restart guidance.
 - One-command `baron install` bootstrap coordinator: native host preflight,
   DSH, Codex, Tencent, and current-project setup in deterministic order, with
-  hidden credential prompts only for missing values and reusable Codex auth.
+  visible validated DeepSeek input only when missing/rejected, hidden admin-key
+  input, and reusable Codex auth.
 
 ## Expansion phase checklist
 
 - P20 rebrand and compatibility lock: local gate PASS.
-- P21 Ubuntu/Debian bootstrap and sudo preflight: local gate PASS; Docker
-  Engine/Compose and `hello-world` were verified on the development host.
+- P21 Ubuntu/Debian Docker bootstrap and sudo preflight: local gate PASS;
+  Docker Engine/Compose and `hello-world` were verified on the development
+  host. P28 extends the same boundary to Node/npm/npx, pnpm, and uv/uvx.
 - P4 live DSH initialization/profile repair, safe startup, and DuckDuckGo MCP
-  search: PASS. Interactive init now collects a missing DeepSeek key through
-  hidden input and writes DSH's official mode-0600 store; non-interactive init
-  fails before installation and reports the exact environment remediation.
+  search: PASS. P28's interactive provider flow intentionally shows the
+  DeepSeek key while it is typed on the trusted terminal, validates it against
+  `/models`, and writes only the validated value to DSH's official mode-0600
+  store; admin keys remain hidden.
 - P22 full Tencent deployment: managed health endpoints and live disposable
   Agent/Wiki setup PASS after the real `owner_user_id` payload correction;
   clean-machine sudo bootstrap, persistent-volume/restart, CodeGraph
@@ -75,6 +86,11 @@
 - P27 release/documentation: local artifact and guidance evidence PASS; final
   publication gate is implemented and correctly returns BLOCKED while the
   external acceptance gates below remain unchecked.
+- P28 validated credentials and Ubuntu/Debian first install: local
+  implementation, provider/rotation fixtures, sudo ordering, checksum,
+  full Go/vet/race-container, shell, installer-preflight, and guidance checks
+  PASS; clean-machine and published-provider replacement/outage acceptance
+  remain pending.
 
 ## Verification evidence
 
@@ -110,6 +126,18 @@ The following commands passed from the repository root:
 - `scripts/check-install-preflight_test.sh`, which proves Linux sudo
   authorization is checked before the first release download and no password
   variable or echo path exists in `install.sh`.
+- Provider validation fixtures cover visible DeepSeek input, weak-key rejection,
+  HTTP invalid/unavailable classification, Authorization forwarding, and
+  secret-safe errors. DSH replacement and Tencent managed `.env` rotation
+  fixtures prove no-overwrite-on-failure, atomic writes, backups, and mode
+  `0600` permissions.
+- Ubuntu/Debian host-bootstrap fixtures prove unsupported distributions stop
+  before work, native sudo reauthorization is bounded, package/download work
+  follows preflight, and uv/uvx installation requires a matching checksum.
+- Fresh 2026-08-26 verification also passed the full race suite in
+  `golang:1.27-bookworm` with GCC. A current-source `baron 0.1.1` smoke passed
+  Docker, DSH, Codex, provider validation, and Tencent health/knowledge checks;
+  only uncached sudo made the read-only report return exit `11`.
 - Focused and full tests for the ordered `baron install` bootstrap plus
   state-aware Codex login notice: an authenticated global Codex store produces
   no repeat sign-in notice, while missing auth produces one actionable notice.
@@ -265,13 +293,17 @@ These are environment limitations, not converted mock passes:
   Docker Desktop, WSL2, Ubuntu, or Tencent UI installation.
 - `go test -race ./...` cannot run: the default invocation requires cgo, and
   `CGO_ENABLED=1` fails because `gcc` is absent.
+- P28-TEST05 remains open because this agent terminal cannot provide the
+  user's interactive sudo authorization for a clean first-install machine.
+  P28-TEST06 remains open because no published-release wrong-key/replacement
+  matrix was claimed from local fixtures.
 
 ## Final status
 
 FINAL STATUS: BLOCKED
 
-Roadmap checklist completion is 399/428 (93.22%); implementation tasks are
-263/269 (97.77%) and mandatory phase tests are 128/151 (84.77%). These are
+Roadmap checklist completion is 416/447 (93.06%); implementation tasks are
+276/282 (97.87%) and mandatory phase tests are 132/157 (84.08%). These are
 transparent checklist percentages, not a release-readiness override.
 
 The local implementation and release evidence are ready for external

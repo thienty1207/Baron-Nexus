@@ -113,13 +113,13 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 			report.Message = "Docker Engine and daemon are ready."
 			return report, nil
 		}
-		if _, err := runner.Run(ctx, "sudo", "-n", "systemctl", "enable", "--now", "docker"); err == nil {
+		if _, err := runSudo(ctx, runner, "systemctl", "enable", "--now", "docker"); err == nil {
 			report.UsedSudo = true
 			report.DaemonStarted = true
-		} else if _, err := runner.Run(ctx, "sudo", "-n", "docker", "info"); err == nil {
+		} else if _, err := runSudo(ctx, runner, "docker", "info"); err == nil {
 			report.UsedSudo = true
 		}
-		if _, err := runner.Run(ctx, "sudo", "-n", "docker", "info"); err == nil {
+		if _, err := runSudo(ctx, runner, "docker", "info"); err == nil {
 			report.Ready = true
 			report.NeedsRelogin = true
 			report.Message = dockerPermissionMessage(report.DaemonStarted)
@@ -136,7 +136,7 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 	if dockerPath, err := runner.LookPath("docker"); err == nil {
 		report.DockerPath = dockerPath
 	}
-	if _, err := runner.Run(ctx, "sudo", "-n", "docker", "info"); err != nil {
+	if _, err := runSudo(ctx, runner, "docker", "info"); err != nil {
 		return report, errors.New("Docker was installed but the daemon is not reachable; run sudo systemctl status docker and rerun baron tencent-memory init")
 	}
 	report.Ready = true
@@ -165,10 +165,10 @@ func preflightSudo(ctx context.Context, runner CommandRunner) error {
 }
 
 func installDockerPackages(ctx context.Context, runner CommandRunner, options DockerBootstrapOptions, distro linuxDistribution, codename string) error {
-	if _, err := runner.Run(ctx, "sudo", "-n", "apt-get", "update"); err != nil {
+	if _, err := runSudo(ctx, runner, "apt-get", "update"); err != nil {
 		return errors.New("Docker bootstrap could not refresh apt metadata; run sudo apt-get update and retry")
 	}
-	if _, err := runner.Run(ctx, "sudo", "-n", "apt-get", "install", "-y", "ca-certificates"); err != nil {
+	if _, err := runSudo(ctx, runner, "apt-get", "install", "-y", "ca-certificates"); err != nil {
 		return errors.New("Docker bootstrap could not install ca-certificates; run sudo apt-get install ca-certificates and retry")
 	}
 
@@ -184,12 +184,11 @@ func installDockerPackages(ctx context.Context, runner CommandRunner, options Do
 	keyExisted := pathExists(aptKeyPath)
 	sourceExisted := pathExists(aptSourcePath)
 	cleanup := func() {
-		args := []string{"-n", "rm", "-f"}
 		if !keyExisted {
-			_, _ = runner.Run(ctx, "sudo", append(append([]string{}, args...), aptKeyPath)...)
+			_, _ = runSudo(ctx, runner, "rm", "-f", aptKeyPath)
 		}
 		if !sourceExisted {
-			_, _ = runner.Run(ctx, "sudo", append(append([]string{}, args...), aptSourcePath)...)
+			_, _ = runSudo(ctx, runner, "rm", "-f", aptSourcePath)
 		}
 	}
 	if options.Downloader == nil {
@@ -213,31 +212,31 @@ func installDockerPackages(ctx context.Context, runner CommandRunner, options Do
 	if err := os.WriteFile(sourcePath, []byte(sources), 0o600); err != nil {
 		return fmt.Errorf("write user-owned Docker apt source: %w", err)
 	}
-	if _, err := runner.Run(ctx, "sudo", "-n", "install", "-m", "0755", "-d", "/etc/apt/keyrings"); err != nil {
+	if _, err := runSudo(ctx, runner, "install", "-m", "0755", "-d", "/etc/apt/keyrings"); err != nil {
 		return errors.New("create Docker apt keyring directory")
 	}
 	if !keyExisted {
-		if _, err := runner.Run(ctx, "sudo", "-n", "install", "-m", "0644", keyPath, aptKeyPath); err != nil {
+		if _, err := runSudo(ctx, runner, "install", "-m", "0644", keyPath, aptKeyPath); err != nil {
 			return errors.New("install the official Docker apt signing key")
 		}
 	}
 	if !sourceExisted {
-		if _, err := runner.Run(ctx, "sudo", "-n", "install", "-m", "0644", sourcePath, aptSourcePath); err != nil {
+		if _, err := runSudo(ctx, runner, "install", "-m", "0644", sourcePath, aptSourcePath); err != nil {
 			cleanup()
 			return errors.New("install the official Docker apt repository definition")
 		}
 	}
-	if _, err := runner.Run(ctx, "sudo", "-n", "apt-get", "update"); err != nil {
+	if _, err := runSudo(ctx, runner, "apt-get", "update"); err != nil {
 		cleanup()
 		return errors.New("Docker bootstrap could not refresh the official Docker apt repository")
 	}
 	packages := []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"}
-	args := append([]string{"-n", "apt-get", "install", "-y"}, packages...)
-	if _, err := runner.Run(ctx, "sudo", args...); err != nil {
+	args := append([]string{"apt-get", "install", "-y"}, packages...)
+	if _, err := runSudo(ctx, runner, args...); err != nil {
 		cleanup()
 		return errors.New("Docker Engine package installation failed; run sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin and retry")
 	}
-	if _, err := runner.Run(ctx, "sudo", "-n", "systemctl", "enable", "--now", "docker"); err != nil {
+	if _, err := runSudo(ctx, runner, "systemctl", "enable", "--now", "docker"); err != nil {
 		cleanup()
 		return errors.New("Docker packages installed but the service could not start; run sudo systemctl enable --now docker and retry")
 	}

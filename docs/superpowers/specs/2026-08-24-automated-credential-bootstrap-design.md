@@ -2,7 +2,11 @@
 
 ## Status
 
-Approved in chat on 2026-08-24 for implementation.
+Approved in chat on 2026-08-24 for implementation. The 2026-08-26
+`credential-and-host-bootstrap-design.md` supersedes this document where the
+user-visible DeepSeek API-key prompt is concerned: provider-key entry is now
+intentionally visible on the user's trusted personal terminal, while the
+no-log/no-state/no-diagnostics secret boundary remains unchanged.
 
 ## Goal
 

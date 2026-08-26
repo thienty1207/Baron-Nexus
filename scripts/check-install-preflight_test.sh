@@ -14,4 +14,17 @@ if rg -n 'SUDO_PASSWORD|sudo_password|printf.*PASSWORD|echo.*PASSWORD' install.s
   printf '%s\n' 'install.sh must not capture or echo a sudo password.' >&2
   exit 20
 fi
+for phrase in \
+  'nodejs' \
+  'pnpm@latest' \
+  'uv-${UV_ARCH}-unknown-linux-gnu.tar.gz' \
+  'sha256sum' \
+  'docker-ce' \
+  'docker-compose-plugin' \
+  'sudo_retry'; do
+  if ! rg -q --fixed-strings "$phrase" install.sh; then
+    printf '%s\n' "install.sh is missing automatic host-bootstrap contract: $phrase" >&2
+    exit 20
+  fi
+done
 printf '%s\n' 'Install sudo preflight contract passed.'

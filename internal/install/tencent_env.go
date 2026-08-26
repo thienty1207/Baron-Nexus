@@ -203,6 +203,54 @@ func EnsureTencentRuntimeEnv(deployDir string, values TencentRuntimeConfig) erro
 	return nil
 }
 
+// ReplaceTencentRuntimeAPIKey rotates the two Baron-managed provider-key
+// fields without disturbing the upstream template or unrelated user values.
+// The caller is responsible for validating the key before invoking this
+// function. Each edit is backed up and written atomically with private mode.
+func ReplaceTencentRuntimeAPIKey(deployDir, key string) error {
+	if err := requireDirectory(deployDir); err != nil {
+		return err
+	}
+	key = strings.TrimSpace(key)
+	if key == "" || strings.ContainsAny(key, "\r\n") {
+		return errors.New("Tencent provider API key is invalid")
+	}
+	envPath := filepath.Join(deployDir, ".env")
+	info, err := os.Lstat(envPath)
+	if err != nil {
+		return fmt.Errorf("inspect Tencent deployment environment: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return errors.New("Tencent managed environment is not a safe regular file")
+	}
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return fmt.Errorf("read Tencent deployment environment: %w", err)
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	changed := false
+	for _, name := range []string{"MEMORY_LLM_API_KEY", "PROXY_UPSTREAM_API_KEY"} {
+		before := strings.Join(lines, "\n")
+		lines = setSimpleEnv(lines, name, key)
+		if strings.Join(lines, "\n") != before {
+			changed = true
+		}
+	}
+	if !changed {
+		return os.Chmod(envPath, 0o600)
+	}
+	if err := backupBeforeEdit(envPath); err != nil {
+		return err
+	}
+	if err := config.AtomicWriteFile(envPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		return fmt.Errorf("write Tencent deployment environment: %w", err)
+	}
+	return nil
+}
+
 func isMissingEnvValue(value string) bool {
 	value = strings.TrimSpace(value)
 	return value == "" || strings.EqualFold(value, "REPLACE_ME")

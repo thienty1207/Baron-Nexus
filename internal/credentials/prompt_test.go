@@ -32,6 +32,26 @@ func TestSecretUsesInjectedReaderWithoutEchoingValue(t *testing.T) {
 	}
 }
 
+func TestVisibleSecretUsesOrdinaryLineInputAndWarnsAboutEcho(t *testing.T) {
+	var output bytes.Buffer
+	prompter := &Prompter{
+		Out: &output,
+		ReadLine: func(io.Reader) (string, error) {
+			return "  visible-provider-key  ", nil
+		},
+	}
+	got, err := prompter.VisibleSecret("DeepSeek API key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "visible-provider-key" {
+		t.Fatalf("secret=%q", got)
+	}
+	if !strings.Contains(strings.ToLower(output.String()), "visible") {
+		t.Fatalf("visible-input warning missing: %q", output.String())
+	}
+}
+
 func TestValueUsesInjectedLineReaderAndDefault(t *testing.T) {
 	var output bytes.Buffer
 	prompter := &Prompter{

@@ -51,6 +51,7 @@ type Options struct {
 	RestoreWithOptions func(archive string, replaceExisting bool) error
 	Install            func() (string, error)
 	Update             func() (string, error)
+	SetCredential      func(provider string) error
 	Init               map[string]func() error
 	InitNotice         map[string]string
 	InitNoticeFunc     map[string]func() string
@@ -175,6 +176,32 @@ func New(options Options) *cobra.Command {
 	root.AddCommand(restore)
 	root.AddCommand(binaryCommand("install", "Download and install the latest verified Baron release.", options.Install))
 	root.AddCommand(binaryCommand("update", "Download and atomically update to the latest verified Baron release.", options.Update))
+
+	credentialsCommand := &cobra.Command{
+		Use:   "credentials",
+		Short: "Validate and rotate provider credentials.",
+	}
+	credentialsSetCommand := &cobra.Command{
+		Use:   "set <provider>",
+		Short: "Validate and save a provider credential.",
+		Args:  exactArgs(1, "credentials set requires a provider"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			provider := strings.ToLower(strings.TrimSpace(args[0]))
+			if provider != "deepseek" {
+				return &ExitError{Code: ExitUnsupportedUpstream, Err: fmt.Errorf("unsupported credential provider %q; only deepseek is supported", args[0])}
+			}
+			if options.SetCredential == nil {
+				return errors.New("credential rotation handler is not configured")
+			}
+			if err := options.SetCredential(provider); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s credential update complete.\n", args[0])
+			return nil
+		},
+	}
+	credentialsCommand.AddCommand(credentialsSetCommand)
+	root.AddCommand(credentialsCommand)
 
 	hook := &cobra.Command{
 		Use:    "hook <client> <event>",

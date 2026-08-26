@@ -19,6 +19,7 @@ func TestCLIExposesFrozenCommandSurface(t *testing.T) {
 	for _, text := range []string{
 		"deepseek-harness", "codex-cli", "tencent-memory", "test", "setup",
 		"status", "doctor", "repair", "backup", "restore", "install", "update",
+		"credentials",
 	} {
 		if !strings.Contains(out.String(), text) {
 			t.Fatalf("help missing %q:\n%s", text, out.String())
@@ -28,19 +29,19 @@ func TestCLIExposesFrozenCommandSurface(t *testing.T) {
 
 func TestVersionFlagUsesBaronFormat(t *testing.T) {
 	var out bytes.Buffer
-	cmd := New(Options{Version: "0.1.1", Out: &out, Err: &out})
+	cmd := New(Options{Version: "0.1.2", Out: &out, Err: &out})
 	cmd.SetArgs([]string{"--version"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(out.String()); got != "baron 0.1.1" {
+	if got := strings.TrimSpace(out.String()); got != "baron 0.1.2" {
 		t.Fatalf("version output=%q", got)
 	}
 }
 
 func TestDefaultVersionIsBaron011(t *testing.T) {
-	if version.Value != "0.1.1" {
-		t.Fatalf("default version=%q, want 0.1.1", version.Value)
+	if version.Value != "0.1.2" {
+		t.Fatalf("default version=%q, want 0.1.2", version.Value)
 	}
 }
 
@@ -48,7 +49,7 @@ func TestInstallAndUpdateCommandsInvokeDedicatedHandlers(t *testing.T) {
 	var out bytes.Buffer
 	installCalled, updateCalled := false, false
 	options := Options{
-		Version: "0.1.1", Out: &out, Err: &out,
+		Version: "0.1.2", Out: &out, Err: &out,
 		Install: func() (string, error) { installCalled = true; return "install ok", nil },
 		Update:  func() (string, error) { updateCalled = true; return "update ok", nil },
 	}
@@ -77,6 +78,31 @@ func TestInstallAndUpdatePropagateHandlerExitErrors(t *testing.T) {
 		Update: func() (string, error) { return "", want },
 	}); code != ExitIntegrityFailure {
 		t.Fatalf("update error code=%d output=%s", code, out.String())
+	}
+}
+
+func TestCredentialsSetDeepseekInvokesRotationHandler(t *testing.T) {
+	var out bytes.Buffer
+	called := ""
+	if code := Run([]string{"credentials", "set", "deepseek"}, Options{
+		Out: &out,
+		Err: &out,
+		SetCredential: func(provider string) error {
+			called = provider
+			return nil
+		},
+	}); code != ExitSuccess || called != "deepseek" {
+		t.Fatalf("code=%d provider=%q output=%s", code, called, out.String())
+	}
+	if !strings.Contains(out.String(), "deepseek") {
+		t.Fatalf("rotation completion output missing provider: %s", out.String())
+	}
+}
+
+func TestCredentialsSetRejectsUnsupportedProvider(t *testing.T) {
+	var out bytes.Buffer
+	if code := Run([]string{"credentials", "set", "openai"}, Options{Out: &out, Err: &out}); code != ExitUnsupportedUpstream {
+		t.Fatalf("unsupported provider code=%d output=%s", code, out.String())
 	}
 }
 

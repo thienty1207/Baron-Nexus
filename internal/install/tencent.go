@@ -134,7 +134,7 @@ func EnsureTencentDeployment(ctx context.Context, runner CommandRunner, options 
 }
 
 func restartExitedTencentProxy(ctx context.Context, runner CommandRunner) error {
-	output, err := runner.Run(ctx, "sudo", "-n", "docker", "inspect", "--format={{.State.Status}}", "tdai-proxy")
+	output, err := runSudo(ctx, runner, "docker", "inspect", "--format={{.State.Status}}", "tdai-proxy")
 	if err != nil {
 		// The regular health checks will classify a missing container. Do not
 		// turn an upstream inspect incompatibility into a destructive action.
@@ -142,7 +142,7 @@ func restartExitedTencentProxy(ctx context.Context, runner CommandRunner) error 
 	}
 	switch strings.ToLower(strings.TrimSpace(output)) {
 	case "exited", "dead", "created":
-		if _, err := runner.Run(ctx, "sudo", "-n", "docker", "restart", "tdai-proxy"); err != nil {
+		if _, err := runSudo(ctx, runner, "docker", "restart", "tdai-proxy"); err != nil {
 			return errors.New("Tencent proxy remained stopped after automatic permission repair; inspect Docker logs")
 		}
 	}
@@ -152,12 +152,16 @@ func restartExitedTencentProxy(ctx context.Context, runner CommandRunner) error 
 func ensureManagedRestartPolicy(ctx context.Context, runner CommandRunner, useSudo bool) error {
 	for _, container := range []string{"tdai-memory-core", "tdai-memory-hub", "tdai-proxy"} {
 		args := []string{"update", "--restart", "unless-stopped", container}
-		command := "docker"
 		if useSudo {
-			command = "sudo"
-			args = append([]string{"-n", "docker"}, args...)
+			args = append([]string{"docker"}, args...)
 		}
-		if _, err := runner.Run(ctx, command, args...); err != nil {
+		var err error
+		if useSudo {
+			_, err = runSudo(ctx, runner, args...)
+		} else {
+			_, err = runner.Run(ctx, "docker", args...)
+		}
+		if err != nil {
 			return fmt.Errorf("set Docker restart policy for %s: %w", container, err)
 		}
 	}
@@ -167,15 +171,15 @@ func ensureManagedRestartPolicy(ctx context.Context, runner CommandRunner, useSu
 func runManagedScript(ctx context.Context, runner CommandRunner, useSudo, pullLatest bool, script string, args ...string) (string, error) {
 	if pullLatest {
 		if useSudo {
-			commandArgs := append([]string{"-n", "env", "PULL=1", "bash", script}, args...)
-			return runner.Run(ctx, "sudo", commandArgs...)
+			commandArgs := append([]string{"env", "PULL=1", "bash", script}, args...)
+			return runSudo(ctx, runner, commandArgs...)
 		}
 		commandArgs := append([]string{"PULL=1", script}, args...)
 		return runner.Run(ctx, "env", commandArgs...)
 	}
 	if useSudo {
-		commandArgs := append([]string{"-n", "bash", script}, args...)
-		return runner.Run(ctx, "sudo", commandArgs...)
+		commandArgs := append([]string{"bash", script}, args...)
+		return runSudo(ctx, runner, commandArgs...)
 	}
 	return runner.Run(ctx, script, args...)
 }
@@ -185,7 +189,7 @@ func restoreManagedOwnership(ctx context.Context, runner CommandRunner, root str
 	if err != nil || identity.Uid == "" || identity.Gid == "" {
 		return errors.New("managed Tencent files were created with sudo but the current user identity could not be resolved; inspect the deployment directory ownership before retrying")
 	}
-	if _, err := runner.Run(ctx, "sudo", "-n", "chown", "-R", identity.Uid+":"+identity.Gid, root); err != nil {
+	if _, err := runSudo(ctx, runner, "chown", "-R", identity.Uid+":"+identity.Gid, root); err != nil {
 		return errors.New("managed Tencent files were created but ownership could not be restored; run sudo chown -R $(id -u):$(id -g) " + root)
 	}
 	return nil
@@ -216,8 +220,8 @@ func ensureTencentProxyConfigReadable(ctx context.Context, runner CommandRunner,
 		{name: "chown", args: []string{tencentProxyRuntimeUID + ":" + tencentProxyRuntimeUID, configFile}},
 		{name: "chmod", args: []string{"0400", configFile}},
 	} {
-		commandArgs := append([]string{"-n", operation.name}, operation.args...)
-		if _, err := runner.Run(ctx, "sudo", commandArgs...); err != nil {
+		commandArgs := append([]string{operation.name}, operation.args...)
+		if _, err := runSudo(ctx, runner, commandArgs...); err != nil {
 			return fmt.Errorf("prepare Tencent proxy config permissions (%s): %w", operation.name, err)
 		}
 	}
@@ -252,7 +256,7 @@ func ensureManagedCheckout(ctx context.Context, runner CommandRunner, options Te
 		if owner == "" {
 			return errors.New("managed Tencent deployment owner could not be resolved for update; rerun with a normal user account")
 		}
-		if _, err := runner.Run(ctx, "sudo", "-n", "chown", "-R", owner, options.Root); err != nil {
+		if _, err := runSudo(ctx, runner, "chown", "-R", owner, options.Root); err != nil {
 			return errors.New("managed Tencent deployment ownership could not be prepared for update; rerun after granting sudo")
 		}
 	}

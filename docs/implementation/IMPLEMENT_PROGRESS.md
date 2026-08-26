@@ -16,8 +16,9 @@ the exact dependency; they are not converted to PASS by mocks.
 - Docker: initially unavailable; subsequently installed through the supported
   Ubuntu/Debian path with sudo preflight. Docker Engine/Compose and the
   `hello-world` smoke test now pass on the development host.
-- Node/npm/npx/pnpm/uv/uvx: available through the user NVM/uv installation;
-  the non-login agent shell needs the explicit Node path for live probes.
+- Node/npm/npx/pnpm/uv/uvx: available on the current host through the user's
+  NVM/uv installation; the implementation now bootstraps these tools on a
+  fresh supported Ubuntu/Debian host when they are missing.
 - Git: `git version 2.53.0`; repository initialized in place because the supplied workspace was not a Git checkout.
 - PDF: 36 pages, extracted and visually checked at representative contract, phase, data-contract, and final pages.
 
@@ -57,7 +58,7 @@ the exact dependency; they are not converted to PASS by mocks.
 | 1 | PASS | P1-T01..P1-T10; Cobra command surface, exit codes, JSON flags, atomic writes, backups, redaction, global state | `internal/cli/`, `internal/config/`, `internal/install/` | CLI/config/install package tests; native binary `--help` and setup smoke | Initial Cobra method mismatch fixed; dependency versions resolved by Go module tooling | Real upstream installers remain environment-gated |
 | 2 | PASS | P2-T01..P2-T10; SQLite WAL schema, idempotent events, checkpoint engine, hook stdin/stdout runtime, bounded logs foundation | `internal/storage/`, `internal/continuity/`, `internal/hooks/` | SQLite concurrency/idempotency tests, 10,000-event multi-process test, checkpoint/Git drift tests, duplicate/malformed hook tests | SQLite per-connection busy behavior fixed with WAL busy timeout plus in-process writer serialization | Cgo race run is blocked by the host toolchain; CGO-free tests pass |
 | 3 | PASS | P3-T01..P3-T10; readiness matrix and secret-safe diagnostics | `internal/doctor/`, CLI app wiring | Docker missing/stopped, Codex auth incomplete, all-fixture-green doctor tests; `baron test --json` smoke | None after probe fixture corrections | Live Tencent and interactive auth remain unavailable; Docker is now installed on the development host |
-| 4 | PASS | P4-T01..P4-T12; pinned DSH install, plugin/profile merge, live safe startup, profile repair, DuckDuckGo MCP row, embedded Baron adapter bundle, compatibility metadata, receipts, and automated credential bootstrap | `internal/install/`, `internal/credentials/`, `adapters/dsh/`, `internal/install/assets/`, `configs/compatibility.json` | Real DSH init/probe/profile repair and DuckDuckGo MCP smoke pass; missing credentials are collected through hidden input and written to DSH's official mode-0600 store; no-key noninteractive mode fails before install | DSH's upstream no-key response is `MISSING_CREDENTIAL`; P4-TEST06 now treats that canonical result as equivalent to the actionable readiness contract | No manual credential-file editing is required |
+| 4 | PASS | P4-T01..P4-T12; pinned DSH install, plugin/profile merge, live safe startup, profile repair, DuckDuckGo MCP row, embedded Baron adapter bundle, compatibility metadata, receipts, and automated credential bootstrap | `internal/install/`, `internal/credentials/`, `adapters/dsh/`, `internal/install/assets/`, `configs/compatibility.json` | Real DSH init/probe/profile repair and DuckDuckGo MCP smoke pass; the current P28 flow validates a missing/rejected DeepSeek key before writing DSH's official mode-0600 store, with intentional visible entry on the trusted terminal; no-key noninteractive mode fails before install | DSH's upstream no-key response is `MISSING_CREDENTIAL`; P4-TEST06 now treats that canonical result as equivalent to the actionable readiness contract | No manual credential-file editing is required; provider rotation is tracked by P28 |
 | 5 | PASS | P5-T01..P5-T09; official nested Codex hook merge, explicit adapter bridge, trust diagnostic, CLI-only Desktop boundary, fail-open response, runtime secret redaction, global state/repair | `adapters/codex/`, `internal/install/`, `internal/app/`, `internal/hooks/` | Hook shape, pinned-version fixture, existing-host Codex reuse, real `baron codex-cli init` materialization, adapter runtime smoke, trust/config inspection, preservation/idempotency, malformed-input, tamper, and redaction tests, and authenticated interactive Codex hook readback pass | Desktop itself remains outside the supported CLI-only boundary; paired-client acceptance is tracked by P12/P13 | No additional P5 runtime dependency |
 | 6 | BLOCKED | P6-T01..P6-T12; native Tencent v3 client, layered reads, identity/agent provisioning, managed deployment bootstrap, safe metadata compensation, and proxy permission recovery | `internal/memory/tencent/`, `internal/install/tencent.go`, `internal/memory/tencent/identity_rollback.go`, `internal/app/` | Strict HTTP fixtures pass; live MemoryCore/Hub/Knowledge/Proxy health and disposable project Agent/Wiki setup pass; `owner_user_id` is sent for live agent creation and stopped proxy config ownership is repaired automatically | Clean-machine init, persistent-volume/restart matrix, and full live service acceptance still require a sudo-authorized runtime | Live P6/P22 acceptance is not marked PASS from one host run |
 | 7 | PASS | P7-T01..P7-T11; stable project identity, setup, move behavior, Unicode/space paths, Git-ignore and permission protections | `internal/project/`, `internal/app/`, `internal/config/` | Setup idempotence, move, Unicode, root rejection, symlink/tamper, and permission tests | None in the fresh Go test run | Live multi-agent clients are covered by later blocked gates |
@@ -73,6 +74,7 @@ the exact dependency; they are not converted to PASS by mocks.
 | 17 | PASS | P17-T01..P17-T10; path/symlink hardening, input validation, secret redaction, bounded output, safe failure paths | `internal/project/`, `internal/config/`, `internal/hooks/`, `internal/memory/tencent/`, `internal/install/` | Security/permission, tamper, redaction, malformed input, bounded log, and contract tests pass; `go vet ./...` passes | None in local static/test evidence | External dependency security review remains outside this offline run |
 | 18 | BLOCKED | P18-T01..P18-T13; release build, platform artifacts, checksums, `0.1.1` version contract, verified `baron install/update`, installer/update rollback, mapping preservation, and publication gate | `scripts/`, `install.sh`, `install.ps1`, `.github/workflows/release.yml`, `internal/release/`, `internal/version/`, `internal/cli/` | CGO-free Linux amd64 and Windows amd64 builds, local GitHub-release fixture, public Linux asset download/checksum/version validation, atomic rollback, and idempotent update pass; first shell installer and Windows runtime remain unverified | Requires Windows execution, first-installer sudo acceptance, and networked installer test |
 | 19 | BLOCKED | P19-T01..P19-T16; final acceptance ledger, release candidate, all client/service gates | docs, release scripts, all implementation packages | Local acceptance contract, full Go tests, vet, builds, checksums, release-gate refusal, live 10-project isolation, live outage queue recovery, killed-Codex recovery, reverse unverified handoff, verified-completion ordering, and real concurrent DSH/Codex integrity pass | External gates remain unavailable: clean-machine Tencent lifecycle, backup/restore clean OS, Windows runtime, full CodeGraph/Skill release journey, and cgo race | Final status cannot be PASS until those gates are executed |
+| 28 | BLOCKED | P28-T01..P28-T10; provider validation, visible DeepSeek input, protected credential rotation, sudo reauthorization, and Ubuntu/Debian host dependency bootstrap | `internal/credentials/`, `internal/install/host.go`, `internal/app/`, `internal/doctor/`, `install.sh`, docs | Provider, rotation, sudo-ordering, checksum, Go, vet, race-container, shell syntax, installer-preflight, and platform-guidance evidence pass locally | Clean Ubuntu/Debian first-install and real published-provider wrong-key/replacement/outage acceptance remain unavailable | Keep P28-TEST05..06 unchecked until those external runs are recorded |
 
 ## Fresh local verification
 
@@ -172,7 +174,32 @@ BLOCKED until the external gates above are available.
   boundary. A real `baron update` reported `0.1.1` already current. The clean
   first-installer and Docker/Tencent bootstrap gates remain unchecked.
 
-## Current Baron Nexus expansion (P20-P27)
+## Fresh verification on 2026-08-26 — credential and host bootstrap
+
+- Current-source local verification passed: `GOTOOLCHAIN=local
+  /usr/local/go/bin/go test -count=1 ./...`, `go vet ./...`, `gofmt -l .`,
+  `git diff --check`, `sh -n install.sh`, the installer-preflight script, the
+  platform-guidance scripts, the branding script, the release-gate fixture,
+  and the executable Bash DSH-adapter test.
+- The full race suite passed in the official `golang:1.27-bookworm` container
+  with GCC: `GOTOOLCHAIN=local /usr/local/go/bin/go test -race -count=1 ./...`.
+  The host itself still has no `gcc`, so the container is the recorded race
+  environment.
+- A temporary binary built directly from this worktree reports `baron 0.1.1`.
+  Its live `baron test --json` reached Docker, Node/npm/npx, pnpm, uv/uvx, DSH,
+  Codex, DSH provider validation, and all Tencent health/knowledge surfaces;
+  it returned `ready:false`, exit `11`, only because sudo authorization was
+  not cached in the agent terminal. No key value appeared in the diagnostic.
+- A current-source `baron install` probe stopped at the native sudo preflight
+  before the release download when the terminal could not authenticate. This
+  confirms the ordering contract but is not clean-machine bootstrap evidence.
+- The official uv latest Linux archive/checksum path was downloaded and the
+  archive contained both regular `uv` and `uvx` binaries; the host bootstrap
+  keeps checksum verification before installation. The public release-gate
+  script still correctly exits `21` while P19/P22/P27 external gates remain
+  unchecked.
+
+## Current Baron Nexus expansion (P20-P28)
 
 | Phase | Status | Fresh local evidence | Remaining external evidence |
 | --- | --- | --- | --- |
@@ -183,8 +210,9 @@ BLOCKED until the external gates above are available.
 | 24 | PASS | Stable registry, five-run reuse, remote reconstruction, same-name isolation, bounded Wiki seed and CodeGraph sync fixtures | Live Tencent asset provisioning |
 | 25 | PASS | Bounded context packets, relevant CodeGraph slices, DSH/Codex symmetry, stale-knowledge boundary, outage fail-open fixtures | Authenticated DSH/Codex handoff |
 | 26 | PASS | Typed queues, retries/dead-letter, freshness, secret corpus, backup/restore, stale-lease recovery, SIGKILL, concurrency and rollback fixtures; live disposable-project outage recovery and live lifecycle queue drain also passed | Real service restart/volume and clean-machine power-loss acceptance |
-| 27 | BLOCKED | Linux/Windows quick-start guidance, native artifacts, SBOM/checksums, rollback metadata, final acceptance report, and release/report hash agreement | Public Linux `v0.1.1` download/update and release checksum verification pass; live user command sequence, first-installer sudo flow, clean Ubuntu, Windows runtime, and full DSH/Codex/Tencent scenarios remain open |
+| 27 | BLOCKED | Linux/Windows quick-start guidance, native artifacts, SBOM/checksums, rollback metadata, final acceptance report, and release/report hash agreement | Historical public Linux `v0.1.1` download/update and release checksum verification pass; the `v0.1.2` candidate is prepared for tagged rebuild; live user command sequence, first-installer sudo flow, clean Ubuntu, Windows runtime, and full DSH/Codex/Tencent scenarios remain open |
+| 28 | BLOCKED | Validated provider credentials, visible DeepSeek prompt policy, atomic DSH/Tencent rotation, bounded sudo reauthorization, and Ubuntu/Debian Docker/Node/pnpm/uv bootstrap | Local Go/fixture/race-container and shell evidence pass; clean first-install and published-provider replacement/outage evidence remain open |
 
-P20, P21, P23, P24, P25, and P26 are local-contract PASS only. P22 and P27
-remain BLOCKED by the explicitly listed live dependencies; no mock fixture is
-counted as a live Tencent or authenticated-agent acceptance pass.
+P20, P21, P23, P24, P25, and P26 are local-contract PASS only. P22, P27, and
+P28 remain BLOCKED by the explicitly listed live dependencies; no mock fixture
+is counted as a live Tencent, provider, or authenticated-agent acceptance pass.

@@ -2,8 +2,8 @@ package version
 
 import "testing"
 
-func TestDefaultVersionIsInitialBaronNexusRelease(t *testing.T) {
-	if Value != "0.1.1" {
-		t.Fatalf("default version=%q, want 0.1.1", Value)
+func TestDefaultVersionIsCurrentBaronNexusRelease(t *testing.T) {
+	if Value != "0.1.2" {
+		t.Fatalf("default version=%q, want 0.1.2", Value)
 	}
 }

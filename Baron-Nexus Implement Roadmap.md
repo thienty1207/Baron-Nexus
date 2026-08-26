@@ -70,10 +70,10 @@ remote memory.
 
 ## Counts
 
-- Original `IMPLEMENT.pdf`: P0-P19, 20 phases, 205 implementation tasks (including `P18-T07B`).
-- Baron Nexus expansion: P20-P27, 8 phases, 63 additional implementation
+- Original `IMPLEMENT.pdf`: P0-P19, 20 phases, 205 implementation tasks (including `P18-T07B`); the roadmap carries four later clarification tasks in those phases.
+- Baron Nexus expansion: P20-P28, 9 phases, 73 additional implementation
   tasks.
-- Full roadmap: **28 phases, 269 implementation tasks**, plus the mandatory
+- Full roadmap: **29 phases, 282 implementation tasks**, plus the mandatory
   phase-test and final-acceptance checklists below.
 
 ## Verification checkpoint — 2026-08-25
@@ -128,7 +128,8 @@ promote external acceptance items to `[X]`.
 | P17 | [X] | Local security, permission, redaction, tamper, bounded-output, and vet evidence complete. |
 | P18 | [ ] | Release artifacts, `baron --version`, verified `baron install/update`, and Linux installer smoke pass; public release and Windows runtime acceptance remain blocked. |
 | P19 | [ ] | Local implementation/report/evidence are current, but the full external release gate is not green. |
-| P20-P27 | [ ] | Baron Nexus expansion is locally implemented through P26; the public `v0.1.1` Linux release/download/update path is verified, while P22 live Tencent and P27 clean-machine, authenticated-agent, first-installer, and Windows-runtime gates remain blocked. |
+| P20-P27 | [ ] | Baron Nexus expansion is locally implemented through P26; the public `v0.1.1` Linux release/download/update path is historical and the `v0.1.2` candidate carries the validated-credential/host-bootstrap changes, while P22 live Tencent and P27 clean-machine, authenticated-agent, first-installer, and Windows-runtime gates remain blocked. |
+| P28 | [ ] | Credential validation, protected rotation, sudo reauthorization, and Ubuntu/Debian dependency bootstrap are implemented with local fixtures; clean-machine and real provider rotation acceptance remain open. |
 
 ## P0 — Baseline, contracts, and Go repository bootstrap `[X]`
 
@@ -968,10 +969,69 @@ DSH/Codex handoff, isolation, recovery, and Windows guidance all have evidence.
 - [X] **P27-TEST06** Windows instructions are accurate, explicit, and do not claim unsupported automation.
 - [X] **P27-TEST07** Final release artifacts, checksums, SBOM, rollback, docs, and acceptance report all agree on the same candidate revision.
 
+## P28 — Validated credentials and complete Ubuntu/Debian first install `[ ]`
+
+**Goal:** Make first-run Linux provisioning genuinely self-contained for
+Ubuntu/Debian, while validating provider credentials before they are persisted
+or copied into Tencent runtime configuration. Keep the explicit visible
+DeepSeek-key entry policy, protected admin-key handling, bounded sudo
+reauthorization, and the Windows manual boundary.
+**Primary files:** `install.sh`, `internal/install/host.go`,
+`internal/credentials/`, `internal/app/`, `internal/doctor/`, `README.md`.
+**Gate:** local implementation and fixture evidence may be checked here, but
+the phase stays unchecked until a clean supported machine and a real provider
+credential rotation have been exercised.
+
+### Implementation tasks
+
+- [X] **P28-T01** Record the approved credential and host-bootstrap design and execution plan with explicit security and external-acceptance boundaries.
+- [X] **P28-T02** Add a visible DeepSeek provider-key prompt that uses native terminal echo, warns the user, trims input, and never copies the value into Baron output or state.
+- [X] **P28-T03** Add a bounded OpenAI-compatible `/models` validator with local weak-key rejection and separate invalid-versus-provider-unavailable classifications.
+- [X] **P28-T04** Make DSH initialization validate existing, inherited, and newly entered provider credentials before reuse or persistence, with bounded replacement attempts and no overwrite on failure.
+- [X] **P28-T05** Validate the Tencent runtime provider key before deployment and add atomic, protected, backup-aware provider-key rotation that preserves unrelated managed values.
+- [X] **P28-T06** Add read-only readiness reporting for provider rejection/outage and expose `baron credentials set deepseek` for explicit one-time rotation.
+- [X] **P28-T07** Add bounded native sudo reauthorization/retry to Go-managed system operations, without accepting or storing the sudo password.
+- [X] **P28-T08** Add Ubuntu/Debian host bootstrap for Docker Engine/Compose, supported Node/npm/npx, latest pnpm, and checksum-verified uv/uvx before release/Tencent downloads.
+- [X] **P28-T09** Extend `./install.sh` with the same sudo-first Ubuntu/Debian dependency bootstrap and retain explicit Windows prerequisite guidance.
+- [X] **P28-T10** Document first-run credentials, visible-key behavior, rotation, sudo expiry, dependency bootstrap, environment overrides, and the remaining live acceptance gates.
+
+### Mandatory tests
+
+- [X] **P28-TEST01** Provider validator and visible-prompt fixtures cover accepted keys, weak keys, 400/401/403 rejection, 429/5xx/network outage, Authorization forwarding, and secret-safe errors.
+- [X] **P28-TEST02** DSH replacement and Tencent rotation fixtures prove rejected/outage candidates do not overwrite existing stores and successful rotation is atomic/permission-protected.
+- [X] **P28-TEST03** Host-bootstrap fixtures prove unsupported distributions stop before work, sudo preflight precedes downloads, sudo reauth is bounded, and uv checksum mismatch is rejected.
+- [X] **P28-TEST04** Full local Go tests, vet/format/diff checks, shell syntax, installer preflight, and platform-guidance checks pass for the implementation.
+- [ ] **P28-TEST05** A clean Ubuntu/Debian machine runs `./install.sh` and `baron install` after one sudo authorization, with missing dependencies installed and no manual package steps.
+- [ ] **P28-TEST06** A real provider-backed run proves valid-key reuse, wrong-key rejection, replacement, and network-outage no-overwrite behavior on the published release.
+
 ## Current evidence ledger
 
 This ledger records why a task is checked and why the remaining external gates
 are intentionally left unchecked.
+
+### Fresh verification — 2026-08-26 credential and host bootstrap
+
+- Current-source local verification passed: `GOTOOLCHAIN=local
+  /usr/local/go/bin/go test -count=1 ./...`, `go vet ./...`, `gofmt -l .`,
+  `git diff --check`, `sh -n install.sh`, installer-preflight, platform
+  guidance, branding, release-gate fixture, and the executable Bash DSH
+  adapter test.
+- The full race suite passed in `golang:1.27-bookworm` with GCC:
+  `GOTOOLCHAIN=local /usr/local/go/bin/go test -race -count=1 ./...`. The
+  host itself still has no `gcc`; the container is the recorded race
+  environment.
+- A temporary binary built directly from this worktree reports `baron 0.1.1`.
+  Its live `baron test --json` reached Docker, Node/npm/npx, pnpm, uv/uvx,
+  DSH, Codex, DSH provider validation, and all Tencent health/knowledge
+  surfaces; it returned `ready:false`, exit `11`, only because sudo was not
+  cached in the agent terminal. No key value appeared in the diagnostic.
+- A current-source `baron install` probe stopped at native sudo preflight before
+  the release download when this terminal could not authenticate. This proves
+  ordering, not clean-machine bootstrap. The public release-gate script still
+  correctly exits `21` while the older P19/P22/P27 external gates remain open.
+- The official uv latest Linux archive/checksum path was downloaded and the
+  archive contained regular `uv` and `uvx` binaries; checksum verification is
+  required before installation.
 
 ### Fresh verification — 2026-08-25
 

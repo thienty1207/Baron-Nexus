@@ -72,6 +72,48 @@ func (p *Prompter) Secret(label string) (string, error) {
 	return value, nil
 }
 
+// VisibleSecret prompts for a provider credential using ordinary terminal
+// line input. The terminal echoes the characters because the user explicitly
+// opted into visible API-key entry. This method never writes the entered value
+// itself; injected readers are deliberately kept silent for deterministic
+// tests and non-terminal callers.
+func (p *Prompter) VisibleSecret(label string) (string, error) {
+	in, out := p.io()
+	if err := p.writePrompt(out, label+" (input will be visible)", ""); err != nil {
+		return "", err
+	}
+
+	var raw string
+	var err error
+	switch {
+	case p.ReadLine != nil:
+		raw, err = p.ReadLine(in)
+	case p.ReadSecret != nil:
+		var data []byte
+		data, err = p.ReadSecret(in)
+		raw = string(data)
+	default:
+		if _, ok := terminalFile(in); !ok {
+			return "", ErrNonInteractive
+		}
+		if p.lineReader == nil {
+			p.lineReader = bufio.NewReader(in)
+		}
+		raw, err = p.lineReader.ReadString('\n')
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", fmt.Errorf("read credential: %w", err)
+	}
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", ErrEmptyValue
+	}
+	if strings.ContainsAny(value, "\r\n") {
+		return "", errors.New("credential value contains an invalid newline")
+	}
+	return value, nil
+}
+
 // Value prompts for a visible non-secret value. An empty response accepts the
 // supplied default when one is present.
 func (p *Prompter) Value(label, defaultValue string) (string, error) {

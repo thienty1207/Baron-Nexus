@@ -44,8 +44,11 @@ type App struct {
 	PromptOutput   io.Writer
 	ReadSecret     credentials.SecretReader
 	ReadLine       credentials.LineReader
-	ReleaseClient  *release.Client
-	ExecutablePath string
+	// ValidateProviderCredential is injectable for deterministic tests. A nil
+	// value uses the live OpenAI-compatible /models validator.
+	ValidateProviderCredential func(context.Context, string, string) error
+	ReleaseClient              *release.Client
+	ExecutablePath             string
 }
 
 func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
@@ -69,7 +72,8 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 			message, err := a.installAndBootstrap(context.Background())
 			return message, classifyError(err)
 		},
-		Update: func() (string, error) { return a.installBaronBinary(false) },
+		Update:        func() (string, error) { return a.installBaronBinary(false) },
+		SetCredential: func(provider string) error { return classifyError(a.SetCredential(provider)) },
 		Hook: func(client, event string, input io.Reader, output io.Writer) error {
 			return a.HandleHook(context.Background(), client, event, "", input, output)
 		},
@@ -203,6 +207,28 @@ func (a *App) readinessReport() (doctor.Report, error) {
 	}
 	surfaceChecks := a.knowledgeSurfaceChecks(context.Background(), global)
 	dshKey, dshKeyErr := install.ReadDSHProviderKey(processEnvironment())
+	dshStatus := doctor.StatusIncomplete
+	dshMessage := "DSH provider credential is not configured."
+	dshSuggestion := "baron deepseek-harness init (or set DEEPSEEK_API_KEY)"
+	if dshKeyErr != nil {
+		dshMessage = "DSH provider credential could not be read safely."
+	} else if dshKey != "" {
+		if validationErr := a.validateProviderCredential(context.Background(), dshProviderBaseURL(processEnvironment()), dshKey); validationErr == nil {
+			dshStatus = doctor.StatusReady
+			dshMessage = "DSH provider credential is configured and accepted by the provider."
+			dshSuggestion = ""
+		} else if errors.Is(validationErr, credentials.ErrProviderUnavailable) {
+			dshStatus = doctor.StatusUnavailable
+			dshMessage = "DSH provider credential could not be validated because the provider or network is unavailable."
+			dshSuggestion = "restore provider connectivity, then rerun baron test"
+		} else {
+			dshMessage = "DSH provider credential was rejected by the provider."
+			dshSuggestion = "baron credentials set deepseek"
+		}
+	}
+	if check := a.tencentProviderCredentialCheck(context.Background(), global); check != nil {
+		surfaceChecks = append(surfaceChecks, *check)
+	}
 	codexHooksPath := global.CodexHooksPath
 	if canonicalPath, pathErr := install.CodexHooksPath(); pathErr == nil {
 		// CODEX_HOME/~/.codex is authoritative for Codex hooks. A path saved
@@ -213,7 +239,10 @@ func (a *App) readinessReport() (doctor.Report, error) {
 	return doctor.Check(context.Background(), doctor.Options{
 		DSHComponents:       global.DSHComponents,
 		DSHProviderChecked:  true,
-		DSHProviderReady:    dshKeyErr == nil && dshKey != "",
+		DSHProviderReady:    dshStatus == doctor.StatusReady,
+		DSHProviderStatus:   dshStatus,
+		DSHProviderMessage:  dshMessage,
+		DSHProviderSuggest:  dshSuggestion,
 		CodexAuthenticated:  codexAuthReady(),
 		CodexProjectTrusted: install.CodexProjectTrusted(projectRoot),
 		TencentEndpoint:     global.Identity.Endpoint,
@@ -226,6 +255,25 @@ func (a *App) readinessReport() (doctor.Report, error) {
 		HTTPClient:          a.HTTPClient,
 		LinuxBootstrap:      runtime.GOOS == "linux",
 	}), nil
+}
+
+func (a *App) tencentProviderCredentialCheck(ctx context.Context, global config.GlobalState) *doctor.CheckResult {
+	if strings.TrimSpace(global.TencentInstallPath) == "" {
+		return nil
+	}
+	managed, err := install.LoadTencentRuntimeConfig(global.TencentInstallPath)
+	if err != nil {
+		return &doctor.CheckResult{Name: "tencent-provider-credential", Status: doctor.StatusIncomplete, Message: "Tencent managed provider credential could not be read safely.", Suggestion: "baron tencent-memory init"}
+	}
+	if missingCredentialValue(managed.MemoryLLMAPIKey) {
+		return &doctor.CheckResult{Name: "tencent-provider-credential", Status: doctor.StatusIncomplete, Message: "Tencent provider credential is not configured in the managed runtime.", Suggestion: "baron tencent-memory init"}
+	}
+	if validationErr := a.validateProviderCredential(ctx, firstNonEmptyString(managed.MemoryLLMBaseURL, dshProviderBaseURL(processEnvironment())), managed.MemoryLLMAPIKey); validationErr == nil {
+		return &doctor.CheckResult{Name: "tencent-provider-credential", Status: doctor.StatusReady, Message: "Tencent provider credential is configured and accepted by the provider."}
+	} else if errors.Is(validationErr, credentials.ErrProviderUnavailable) {
+		return &doctor.CheckResult{Name: "tencent-provider-credential", Status: doctor.StatusUnavailable, Message: "Tencent provider credential could not be validated because the provider or network is unavailable.", Suggestion: "restore provider connectivity, then rerun baron test"}
+	}
+	return &doctor.CheckResult{Name: "tencent-provider-credential", Status: doctor.StatusIncomplete, Message: "Tencent provider credential was rejected by the provider.", Suggestion: "baron credentials set deepseek"}
 }
 
 func codexTrustProjectRoot() string {
@@ -521,6 +569,12 @@ func classifyError(err error) error {
 	var existing *cli.ExitError
 	if errors.As(err, &existing) {
 		return err
+	}
+	if errors.Is(err, credentials.ErrProviderUnavailable) {
+		return &cli.ExitError{Code: cli.ExitTencentUnavailable, Err: err}
+	}
+	if errors.Is(err, credentials.ErrInvalidProviderCredential) {
+		return &cli.ExitError{Code: cli.ExitAuthIncomplete, Err: err}
 	}
 	message := strings.ToLower(err.Error())
 	code := cli.ExitUsage
@@ -1076,7 +1130,16 @@ func (a *App) resolveDSHCredential() (string, error) {
 		return "", err
 	}
 	if key != "" {
-		return key, nil
+		if err := a.validateProviderCredential(context.Background(), dshProviderBaseURL(values), key); err == nil {
+			return key, nil
+		} else if strings.TrimSpace(values["DEEPSEEK_API_KEY"]) != "" {
+			// An inherited environment value wins over the official DSH store
+			// for every child process. Do not pretend a replacement store value
+			// repaired an invalid environment override.
+			return "", credentialValidationFailure("DeepSeek", "baron deepseek-harness init", err)
+		} else if !errors.Is(err, credentials.ErrInvalidProviderCredential) {
+			return "", credentialValidationFailure("DeepSeek", "baron deepseek-harness init", err)
+		}
 	}
 
 	// Allow either initializer to be run first. A provider key already present
@@ -1088,21 +1151,38 @@ func (a *App) resolveDSHCredential() (string, error) {
 			return "", managedErr
 		}
 		if !missingCredentialValue(managed.MemoryLLMAPIKey) {
-			if err := install.EnsureDSHProviderKey(values, managed.MemoryLLMAPIKey); err != nil {
-				return "", err
+			if err := a.validateProviderCredential(context.Background(), firstNonEmptyString(managed.MemoryLLMBaseURL, dshProviderBaseURL(values)), managed.MemoryLLMAPIKey); err == nil {
+				if err := install.EnsureDSHProviderKey(values, managed.MemoryLLMAPIKey); err != nil {
+					return "", err
+				}
+				return managed.MemoryLLMAPIKey, nil
+			} else if !errors.Is(err, credentials.ErrInvalidProviderCredential) {
+				return "", credentialValidationFailure("DeepSeek", "baron deepseek-harness init", err)
 			}
-			return managed.MemoryLLMAPIKey, nil
 		}
 	}
 
-	key, err = a.prompter().Secret("DeepSeek API key (DEEPSEEK_API_KEY)")
-	if err != nil {
-		return "", credentialPromptFailure("DeepSeek", "DEEPSEEK_API_KEY", "baron deepseek-harness init", err)
+	baseURL := dshProviderBaseURL(values)
+	for attempt := 0; attempt < 3; attempt++ {
+		key, promptErr := a.prompter().VisibleSecret("DeepSeek API key (DEEPSEEK_API_KEY)")
+		if promptErr != nil {
+			if errors.Is(promptErr, credentials.ErrEmptyValue) {
+				continue
+			}
+			return "", credentialPromptFailure("DeepSeek", "DEEPSEEK_API_KEY", "baron deepseek-harness init", promptErr)
+		}
+		if validationErr := a.validateProviderCredential(context.Background(), baseURL, key); validationErr != nil {
+			if errors.Is(validationErr, credentials.ErrInvalidProviderCredential) {
+				continue
+			}
+			return "", credentialValidationFailure("DeepSeek", "baron deepseek-harness init", validationErr)
+		}
+		if err := install.EnsureDSHProviderKey(values, key); err != nil {
+			return "", err
+		}
+		return key, nil
 	}
-	if err := install.EnsureDSHProviderKey(values, key); err != nil {
-		return "", err
-	}
-	return key, nil
+	return "", credentialValidationFailure("DeepSeek", "baron deepseek-harness init", credentials.ErrInvalidProviderCredential)
 }
 
 func (a *App) resolveTencentRuntimeConfig(deploymentRoot string) (install.TencentRuntimeConfig, error) {
@@ -1117,11 +1197,15 @@ func (a *App) resolveTencentRuntimeConfig(deploymentRoot string) (install.Tencen
 	}
 	resolved := install.ResolveTencentRuntimeConfigWithSources(values, managed, dshKey)
 	if len(resolved.MissingProviderValues()) == 0 {
-		return resolved, nil
+		if validationErr := a.validateProviderCredential(context.Background(), resolved.MemoryLLMBaseURL, resolved.MemoryLLMAPIKey); validationErr == nil {
+			return resolved, nil
+		} else if !errors.Is(validationErr, credentials.ErrInvalidProviderCredential) {
+			return install.TencentRuntimeConfig{}, credentialValidationFailure("Tencent", "baron tencent-memory init", validationErr)
+		}
 	}
 
 	for attempt := 0; attempt < 3; attempt++ {
-		key, promptErr := a.prompter().Secret("Tencent provider API key (DEEPSEEK_API_KEY)")
+		key, promptErr := a.prompter().VisibleSecret("Tencent provider API key (DEEPSEEK_API_KEY)")
 		if promptErr != nil {
 			if errors.Is(promptErr, credentials.ErrEmptyValue) {
 				continue
@@ -1134,10 +1218,67 @@ func (a *App) resolveTencentRuntimeConfig(deploymentRoot string) (install.Tencen
 		}
 		resolved = install.MergeTencentRuntimeConfig(resolved, install.DefaultTencentRuntimeConfig())
 		if len(resolved.MissingProviderValues()) == 0 {
+			if validationErr := a.validateProviderCredential(context.Background(), resolved.MemoryLLMBaseURL, resolved.MemoryLLMAPIKey); validationErr != nil {
+				if errors.Is(validationErr, credentials.ErrInvalidProviderCredential) {
+					continue
+				}
+				return install.TencentRuntimeConfig{}, credentialValidationFailure("Tencent", "baron tencent-memory init", validationErr)
+			}
 			return resolved, nil
 		}
 	}
 	return install.TencentRuntimeConfig{}, credentialPromptFailure("Tencent", "DEEPSEEK_API_KEY", "baron tencent-memory init", credentials.ErrEmptyValue)
+}
+
+// SetCredential is the explicit provider-key rotation command. Validation is
+// completed before either provider-owned store is changed.
+func (a *App) SetCredential(provider string) error {
+	if strings.ToLower(strings.TrimSpace(provider)) != "deepseek" {
+		return fmt.Errorf("unsupported credential provider %q", provider)
+	}
+	values := processEnvironment()
+	global, _, err := a.loadGlobal()
+	if err != nil {
+		return err
+	}
+	managed := install.TencentRuntimeConfig{}
+	if strings.TrimSpace(global.TencentInstallPath) != "" {
+		managed, err = install.LoadTencentRuntimeConfig(global.TencentInstallPath)
+		if err != nil {
+			return err
+		}
+	}
+	baseURL := configuredProviderBaseURL(values, managed.MemoryLLMBaseURL)
+	var key string
+	for attempt := 0; attempt < 3; attempt++ {
+		candidate, promptErr := a.prompter().VisibleSecret("DeepSeek API key")
+		if promptErr != nil {
+			if errors.Is(promptErr, credentials.ErrEmptyValue) {
+				continue
+			}
+			return credentialPromptFailure("DeepSeek", "DEEPSEEK_API_KEY", "baron credentials set deepseek", promptErr)
+		}
+		if validationErr := a.validateProviderCredential(context.Background(), baseURL, candidate); validationErr != nil {
+			if errors.Is(validationErr, credentials.ErrInvalidProviderCredential) {
+				continue
+			}
+			return credentialValidationFailure("DeepSeek", "baron credentials set deepseek", validationErr)
+		}
+		key = candidate
+		break
+	}
+	if key == "" {
+		return credentialValidationFailure("DeepSeek", "baron credentials set deepseek", credentials.ErrInvalidProviderCredential)
+	}
+	if err := install.EnsureDSHProviderKey(values, key); err != nil {
+		return err
+	}
+	if strings.TrimSpace(global.TencentInstallPath) != "" {
+		if replaceErr := install.ReplaceTencentRuntimeAPIKey(filepath.Join(global.TencentInstallPath, "deploy", "global-images"), key); replaceErr != nil && !errors.Is(replaceErr, os.ErrNotExist) {
+			return replaceErr
+		}
+	}
+	return nil
 }
 
 func (a *App) resolveTencentAdminKey(deploymentRoot string) (string, error) {
@@ -1160,6 +1301,29 @@ func (a *App) prompter() *credentials.Prompter {
 	return &credentials.Prompter{In: a.Input, Out: a.PromptOutput, ReadSecret: a.ReadSecret, ReadLine: a.ReadLine}
 }
 
+func (a *App) validateProviderCredential(ctx context.Context, baseURL, key string) error {
+	if a.ValidateProviderCredential != nil {
+		return a.ValidateProviderCredential(ctx, baseURL, key)
+	}
+	return credentials.ValidateOpenAICompatible(ctx, a.HTTPClient, baseURL, key)
+}
+
+func dshProviderBaseURL(values map[string]string) string {
+	return configuredProviderBaseURL(values, "")
+}
+
+func configuredProviderBaseURL(values map[string]string, fallback string) string {
+	for _, name := range []string{"BARON_DSH_LLM_BASE_URL", "DEEPSEEK_BASE_URL", "OPENAI_BASE_URL"} {
+		if value := strings.TrimSpace(values[name]); value != "" {
+			return value
+		}
+	}
+	if value := strings.TrimSpace(fallback); value != "" {
+		return value
+	}
+	return install.DefaultTencentRuntimeConfig().MemoryLLMBaseURL
+}
+
 func credentialPromptFailure(component, environmentName, command string, err error) error {
 	if errors.Is(err, credentials.ErrNonInteractive) {
 		return fmt.Errorf("%s provider credential is required; set %s in the launching environment or rerun %s from an interactive terminal: %w", component, environmentName, command, err)
@@ -1169,6 +1333,21 @@ func credentialPromptFailure(component, environmentName, command string, err err
 	}
 	return fmt.Errorf("%s provider credential prompt failed; set %s or rerun %s: %w", component, environmentName, command, err)
 }
+
+func credentialValidationFailure(component, command string, err error) error {
+	if errors.Is(err, credentials.ErrInvalidProviderCredential) {
+		return providerValidationError{message: fmt.Sprintf("%s provider credential was rejected; rerun %s or use baron credentials set deepseek", component, command), cause: err}
+	}
+	return providerValidationError{message: fmt.Sprintf("%s provider credential could not be validated; the provider or network is unavailable; rerun %s", component, command), cause: err}
+}
+
+type providerValidationError struct {
+	message string
+	cause   error
+}
+
+func (e providerValidationError) Error() string { return e.message }
+func (e providerValidationError) Unwrap() error { return e.cause }
 
 func missingCredentialValue(value string) bool {
 	value = strings.TrimSpace(value)

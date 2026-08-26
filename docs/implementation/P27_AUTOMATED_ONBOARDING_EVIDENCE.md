@@ -78,3 +78,24 @@ publication remain blocked until those environments are available.
   startup probe passed. Windows runtime, clean Ubuntu bootstrap, Docker
   restart/volume, authenticated full release acceptance, and publication
   remain blocked.
+
+## Fresh credential and host-bootstrap verification — 2026-08-26
+
+- P28 adds visible DeepSeek provider-key entry only while the user is actively
+  typing in a trusted terminal; provider validation uses the configured
+  OpenAI-compatible `/models` endpoint before DSH/Tencent persistence. Tencent
+  admin-key input remains hidden, and diagnostics never include key material.
+- Rejected or unavailable candidates do not replace the existing DSH
+  credential or managed Tencent `.env`; `baron credentials set deepseek`
+  performs explicit validated rotation and preserves unrelated managed values.
+- Ubuntu/Debian host bootstrap now installs/verifies Docker Engine/Compose,
+  Node/npm/npx, pnpm, and checksum-verified uv/uvx after native sudo
+  preflight. Sudo reauthentication is bounded and Baron never receives the
+  password. Windows remains an explicit manual Docker Desktop/WSL2/Ubuntu/
+  Tencent prerequisite boundary.
+- Full Go tests, vet, formatting/diff, shell, installer-preflight, platform,
+  branding, release-gate fixture, executable DSH adapter test, and the race
+  suite in `golang:1.27-bookworm` passed. A current-source `baron test --json`
+  smoke reached DSH/provider/Tencent surfaces; only uncached sudo returned
+  incomplete. Clean-machine and published-provider rotation evidence remain
+  blocked and are not claimed here.
