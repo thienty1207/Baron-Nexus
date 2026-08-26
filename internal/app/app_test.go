@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/baron-shared-brain/baron/internal/cli"
 	"github.com/baron-shared-brain/baron/internal/config"
@@ -28,6 +29,21 @@ import (
 	"github.com/baron-shared-brain/baron/internal/release"
 	"github.com/baron-shared-brain/baron/internal/storage"
 )
+
+func TestReleaseHTTPClientUsesArtifactTimeoutWithoutMutatingBase(t *testing.T) {
+	base := &http.Client{Timeout: 3 * time.Second}
+
+	got := releaseHTTPClient(base)
+	if got == base {
+		t.Fatal("release client must be a clone so shared clients are not mutated")
+	}
+	if got.Timeout < releaseDownloadTimeout {
+		t.Fatalf("release timeout=%s, want at least %s", got.Timeout, releaseDownloadTimeout)
+	}
+	if base.Timeout != 3*time.Second {
+		t.Fatalf("base timeout=%s, want 3s", base.Timeout)
+	}
+}
 
 type credentialOrderingRunner struct {
 	calls []string

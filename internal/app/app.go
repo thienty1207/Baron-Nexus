@@ -86,6 +86,19 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 
 const codexLoginAction = "If Codex is not authenticated, run codex and complete ChatGPT sign-in once; Baron reuses Codex's global auth afterward."
 
+const releaseDownloadTimeout = 2 * time.Minute
+
+func releaseHTTPClient(base *http.Client) *http.Client {
+	if base == nil {
+		return &http.Client{Timeout: releaseDownloadTimeout}
+	}
+	clone := *base
+	if clone.Timeout == 0 || clone.Timeout < releaseDownloadTimeout {
+		clone.Timeout = releaseDownloadTimeout
+	}
+	return &clone
+}
+
 func codexLoginNotice() string {
 	if codexAuthReady() {
 		return ""
@@ -103,16 +116,16 @@ func (a *App) installBaronBinary(force bool) (string, error) {
 		}
 	}
 	client := release.Client{
-		HTTPClient: a.HTTPClient,
 		Repository: os.Getenv("BARON_RELEASE_REPOSITORY"),
 		APIBaseURL: os.Getenv("BARON_RELEASE_API_BASE_URL"),
 	}
 	if a.ReleaseClient != nil {
 		client = *a.ReleaseClient
-		if client.HTTPClient == nil {
-			client.HTTPClient = a.HTTPClient
-		}
 	}
+	if client.HTTPClient == nil {
+		client.HTTPClient = a.HTTPClient
+	}
+	client.HTTPClient = releaseHTTPClient(client.HTTPClient)
 	report, err := client.InstallLatest(context.Background(), target, version.Value, force)
 	if err != nil {
 		return "", classifyError(err)
