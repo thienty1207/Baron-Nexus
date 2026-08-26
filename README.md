@@ -30,7 +30,9 @@ The expected output is `baron 0.1.1`. The installer verifies the release
 manifest and SHA-256 list before writing the binary. It refuses to replace an
 existing binary unless replacement is explicitly enabled. Windows users use
 the release's `install.ps1` with PowerShell after installing the documented
-Windows prerequisites.
+Windows prerequisites. `sudo -v` authorizes the operation in the current
+terminal; the installer verifies that authorization again before downloading
+release metadata or the binary and never reads or stores the password.
 
 ### 2. First time in a project: `baron install`
 
@@ -45,7 +47,10 @@ baron install
 ```
 
 The sequence is idempotent, so rerunning it repairs missing Baron-owned pieces
-without replacing project identity or user-owned agent configuration.
+without replacing project identity or user-owned agent configuration. Baron
+uses the native sudo authorization only to manage Docker/Tencent prerequisites;
+it verifies sudo non-interactively and never receives, echoes, or stores the
+password.
 
 ### 3. Later version refresh: `baron update`
 
@@ -62,30 +67,6 @@ Both `baron install` and `baron update` validate the release manifest, SHA-256,
 and candidate `baron --version` output before atomic replacement; a failed
 validation keeps the prior binary recoverable. They never overwrite project
 source, `.baron` identity, checkpoints, credentials, or Tencent state.
-
-## Quick start (new Ubuntu/Debian machine)
-
-Quick start is only the combined example of the two first-time operations
-above; it is not a fourth command:
-
-```text
-git clone https://github.com/thienty1207/Baron-Nexus.git
-cd Baron-Nexus
-sudo -v
-./install.sh
-export PATH="$HOME/.local/bin:$PATH"
-cd /path/to/project
-sudo -v
-baron install
-```
-
-`./install.sh` asks the native `sudo` program to authorize the operation before
-it downloads release metadata or the binary. Baron never receives, echoes, or
-stores the sudo password. If sudo is unavailable, the installer stops before
-network activity and prints the remediation. After the binary exists, the
-second `sudo -v` in the same terminal gives `baron install` an active sudo
-authorization; Baron verifies it non-interactively and never reads the
-password. `baron install` then performs the project bootstrap described above.
 
 The initializer commands remain available separately for advanced repair:
 
