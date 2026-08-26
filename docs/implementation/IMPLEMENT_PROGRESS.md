@@ -71,7 +71,7 @@ the exact dependency; they are not converted to PASS by mocks.
 | 15 | BLOCKED | P15-T01..P15-T07; project isolation, identity binding, credential separation, redaction | `internal/project/`, `internal/memory/tencent/`, `internal/config/`, `internal/app/` | Ten-project identity, ambiguous-agent, tamper, symlink, secret-persistence, and HTTP-isolation tests pass | Legacy/live Tencent namespace separation cannot run | Requires Tencent deployment and multiple authenticated project environments |
 | 16 | BLOCKED | P16-T01..P16-T09; backup/restore, explicit safe replacement, checksum validation, secret exclusion, update rollback, Windows ACL adaptation | `internal/app/`, `internal/install/`, `install.ps1` | Backup secret exclusion, checksum-corruption rejection, conflict-safe restore with retained rollback copy, and binary rollback tests pass | Docker-volume and cross-OS restore tests unavailable | Requires Docker volume and Windows runtime validation |
 | 17 | PASS | P17-T01..P17-T10; path/symlink hardening, input validation, secret redaction, bounded output, safe failure paths | `internal/project/`, `internal/config/`, `internal/hooks/`, `internal/memory/tencent/`, `internal/install/` | Security/permission, tamper, redaction, malformed input, bounded log, and contract tests pass; `go vet ./...` passes | None in local static/test evidence | External dependency security review remains outside this offline run |
-| 18 | BLOCKED | P18-T01..P18-T13; release build, platform artifacts, checksums, `0.1.1` version contract, verified `baron install/update`, installer/update rollback, mapping preservation, and publication gate | `scripts/`, `install.sh`, `install.ps1`, `.github/workflows/release.yml`, `internal/release/`, `internal/version/`, `internal/cli/` | CGO-free Linux amd64 and Windows amd64 builds, local GitHub-release fixture, checksum/version validation, atomic rollback, and installer smoke pass locally | Windows runtime and public GitHub release/download/update acceptance remain unavailable until the repository is published and tagged | Requires Windows execution and networked installer test |
+| 18 | BLOCKED | P18-T01..P18-T13; release build, platform artifacts, checksums, `0.1.1` version contract, verified `baron install/update`, installer/update rollback, mapping preservation, and publication gate | `scripts/`, `install.sh`, `install.ps1`, `.github/workflows/release.yml`, `internal/release/`, `internal/version/`, `internal/cli/` | CGO-free Linux amd64 and Windows amd64 builds, local GitHub-release fixture, public Linux asset download/checksum/version validation, atomic rollback, and idempotent update pass; first shell installer and Windows runtime remain unverified | Requires Windows execution, first-installer sudo acceptance, and networked installer test |
 | 19 | BLOCKED | P19-T01..P19-T16; final acceptance ledger, release candidate, all client/service gates | docs, release scripts, all implementation packages | Local acceptance contract, full Go tests, vet, builds, checksums, release-gate refusal, live 10-project isolation, live outage queue recovery, killed-Codex recovery, reverse unverified handoff, verified-completion ordering, and real concurrent DSH/Codex integrity pass | External gates remain unavailable: clean-machine Tencent lifecycle, backup/restore clean OS, Windows runtime, full CodeGraph/Skill release journey, and cgo race | Final status cannot be PASS until those gates are executed |
 
 ## Fresh local verification
@@ -157,18 +157,33 @@ Candidate release evidence is recorded in
 `docs/implementation/FINAL_ACCEPTANCE_REPORT.md`. The final status remains
 BLOCKED until the external gates above are available.
 
+## Fresh verification on 2026-08-26
+
+- The public GitHub `v0.1.1` manifest, checksum list, and Linux amd64 binary
+  were downloaded and verified with `sha256sum -c`; the manifest source
+  revision is `3d9e76961e2faaa63ee3b2cfaa5d8c3df9231036`.
+- The release client now clones the shared HTTP client and gives release
+  metadata/artifact downloads a two-minute timeout instead of inheriting the
+  three-second Tencent/API timeout. The regression test was observed failing
+  before the fix and passing after it; full `go test ./...` and `go vet ./...`
+  also pass.
+- A real `/home/ty/project-test` `baron install` using the public fixed binary
+  passed release download and stopped at the expected interactive sudo
+  boundary. A real `baron update` reported `0.1.1` already current. The clean
+  first-installer and Docker/Tencent bootstrap gates remain unchecked.
+
 ## Current Baron Nexus expansion (P20-P27)
 
 | Phase | Status | Fresh local evidence | Remaining external evidence |
 | --- | --- | --- | --- |
 | 20 | PASS | Nexus rebrand, compatibility lock, public-text scan, command/help smoke | None for the local rebrand contract |
 | 21 | PASS | Ubuntu/Debian detection, sudo-before-network, official Docker apt plan, idempotent repair, restart policy, and Windows guidance fixtures | Clean-machine Ubuntu/Debian matrix and user-specific sudo scenarios |
-| 22 | BLOCKED | Pinned Tencent checkout, safe runtime env, complete stack orchestration, health surfaces, identity, immutable deployment manifest, update rollback fixtures, and automated credential reuse/prompting | Pinned checkout and deployment scripts pass local checks; all four managed health endpoints returned HTTP 200; live Project A/B setup reused distinct Agent bindings and Wiki reached `ready` after the `owner_user_id` payload fix; the live CodeGraph status call now passes Tencent's narrow schema and retains an actual asynchronous `pending` index honestly; provider/admin credentials are loaded, reused, or collected without manual `.env` editing; current-project raw Wiki source listing returns 10 files while Tencent still reports Wiki `processing`; health-first repair regression and real repair pass | Clean-machine bootstrap, five-run identity/stack acceptance, service restart/volume checks, CodeGraph completion, and release authentication remain open |
+| 22 | BLOCKED | Pinned Tencent checkout, safe runtime env, complete stack orchestration, health surfaces, identity, immutable deployment manifest, update rollback fixtures, and automated credential reuse/prompting | Pinned checkout and deployment scripts pass local checks; all four managed health endpoints returned HTTP 200; live Project A/B setup reused distinct Agent bindings and Wiki reached `ready` after the `owner_user_id` payload fix; the live CodeGraph status call now passes Tencent's narrow schema and retains an actual asynchronous `pending` index honestly; provider/admin credentials are loaded, reused, or collected without manual `.env` editing; current-project raw Wiki source listing returns 10 files while Tencent still reports Wiki `processing`; health-first repair regression and real repair pass | Clean-machine bootstrap, five-run identity/stack acceptance, service restart/volume checks, and CodeGraph completion remain open |
 | 23 | PASS | Strict isolated v3 Memory/Knowledge/Skill/metadata route fixtures and capability diagnostics | Live Tencent API compatibility |
 | 24 | PASS | Stable registry, five-run reuse, remote reconstruction, same-name isolation, bounded Wiki seed and CodeGraph sync fixtures | Live Tencent asset provisioning |
 | 25 | PASS | Bounded context packets, relevant CodeGraph slices, DSH/Codex symmetry, stale-knowledge boundary, outage fail-open fixtures | Authenticated DSH/Codex handoff |
 | 26 | PASS | Typed queues, retries/dead-letter, freshness, secret corpus, backup/restore, stale-lease recovery, SIGKILL, concurrency and rollback fixtures; live disposable-project outage recovery and live lifecycle queue drain also passed | Real service restart/volume and clean-machine power-loss acceptance |
-| 27 | BLOCKED | Linux/Windows quick-start guidance, native artifacts, SBOM/checksums, rollback metadata, final acceptance report, and release/report hash agreement | Live user command sequence provisions Tencent/project state without Panel operations; clean Ubuntu, Windows runtime, full DSH/Codex/Tencent scenarios, and publication gate remain open |
+| 27 | BLOCKED | Linux/Windows quick-start guidance, native artifacts, SBOM/checksums, rollback metadata, final acceptance report, and release/report hash agreement | Public Linux `v0.1.1` download/update and release checksum verification pass; live user command sequence, first-installer sudo flow, clean Ubuntu, Windows runtime, and full DSH/Codex/Tencent scenarios remain open |
 
 P20, P21, P23, P24, P25, and P26 are local-contract PASS only. P22 and P27
 remain BLOCKED by the explicitly listed live dependencies; no mock fixture is

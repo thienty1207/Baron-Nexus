@@ -2,15 +2,15 @@
 
 ## Candidate
 
-- Source revision: `b91ba3a3051e508eff0f8dc60341e07abd6cbd79` (0.1.1 implementation candidate).
+- Source revision: `3d9e76961e2faaa63ee3b2cfaa5d8c3df9231036` (0.1.1 release candidate with the public-download timeout fix).
 - Working tree: final release candidate; user-local `.baron/` state remains
   untracked and intentionally excluded from the release.
 - Version: `0.1.1`.
 - Toolchain: `go1.27.0 linux/amd64`
-- Release directory: `/tmp/baron-release-0.1.1.final.akD6Ay`
-- Linux SHA-256: `b024404ff519c4e69f3158fff4fed35dbc18397cf0ee7a8a63390d3e4fce7bd7`
-- Windows SHA-256: `b7b98386a37689d95d0623e27896bc1a840a2dcc5c3dc69c7e2bfd1d04d5c5f4`
-- Release manifest SHA-256: `274f5be27c8b0d05c3d3cfbced1ac8f799d2fc32a7f7ad49de0507ea8eaeca3b`
+- Release directory: `/tmp/baron-release-0.1.1.fixed.gOuFUD`
+- Linux SHA-256: `5ff679186e5c8c5f11c2a0d5698c7732d9fdb8d6ed961bf36a1fdb6802752d88`
+- Windows SHA-256: `da843103489c0eadf53bb34b536b8deb82e956b9262f08808bbab6116cb23b58`
+- Release manifest SHA-256: `357aa14268a4c540584e704fd15529b6958c689ac17555eb2146b365de8e398f`
 - Toolchain file SHA-256: `76227025cc0bc2be7067aa45d11e09cacfd49c58f498f4c2e4f6a9872a607bf9`
 - SBOM SHA-256: `a3e949d6f9cb2c9e3cfd72e346db408050a0530f8953f5aa6e382e777747f84c`
 
@@ -204,6 +204,13 @@ The following commands passed from the repository root:
   separate watched Codex process was killed after its exit-23 tool result and
   DSH recovered/reran the exact checkpoint command with exit 0.
 
+Post-publication verification on 2026-08-26 downloaded the public `v0.1.1`
+manifest, checksum list, and Linux binary from GitHub; `sha256sum -c` passed
+for the downloaded artifacts and the manifest embeds the candidate source
+revision above. The same fixed binary completed the release portion of a real
+`baron install` before the current terminal's interactive sudo boundary, and
+`baron update` reported the version already current.
+
 The release directory contains a static Linux ELF and a Windows PE32+ binary;
 the manifest embeds the candidate source revision above.
 
@@ -225,17 +232,16 @@ These are environment limitations, not converted mock passes:
   same result. Docker CLI, Node/npm/npx/uv/uvx, DSH, Codex auth/hooks, and the
   four Tencent health surfaces were ready, while Docker daemon and sudo were
   not.
-- The installed `/home/ty/.local/bin/baron` matches the rebuilt Linux release
-  artifact (`b024404ff519c4e69f3158fff4fed35dbc18397cf0ee7a8a63390d3e4fce7bd7`)
-  and reports `baron 0.1.1`. It was staged locally from the verified artifact;
-  the interactive first-download shell installer remains subject to its native
-  sudo prompt and public GitHub release availability.
-- From `/home/ty/project-test`, the real `baron install` command reached the
-  configured GitHub release endpoint and returned HTTP 404 because `v0.1.1`
-  has not been published yet; the command therefore stopped before bootstrap,
-  exactly as the verified-release contract requires. The ordered bootstrap is
-  covered by the full app tests and the existing project acceptance was rerun
-  with the rebuilt 0.1.1 binary through DSH, Codex, Tencent, setup, and repair.
+- The installed `/home/ty/.local/bin/baron` now matches the public fixed Linux
+  release artifact (`5ff679186e5c8c5f11c2a0d5698c7732d9fdb8d6ed961bf36a1fdb6802752d88`)
+  and reports `baron 0.1.1`. The public manifest, checksum list, and binary
+  were downloaded from GitHub and verified successfully.
+- From `/home/ty/project-test`, the real `baron install` command using that
+  fixed binary passed the release download stage and then stopped at the
+  expected native host boundary: `sudo: A terminal is required to
+  authenticate`. It no longer fails with the former three-second release
+  timeout. A subsequent real `baron update` returned `Baron is already up to
+  date at version 0.1.1.` without touching project state.
 - In disposable `/home/ty/project-test`, real DSH, Codex, and Tencent init plus
   `baron setup` and `baron repair` completed. The project status ended with
   Wiki `ready`, zero pending/dead-letter queue items, and honest CodeGraph
