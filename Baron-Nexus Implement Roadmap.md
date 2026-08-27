@@ -1023,8 +1023,8 @@ explicitly unchecked.
 - [X] **P29-T06** Resolve Tencent default `HEAD` to an immutable commit for latest deployment work while preserving manifest-based rollback.
 - [X] **P29-T07** Make shell and PowerShell release installers resolve latest Baron tags instead of using mutable release-download redirects.
 - [X] **P29-T08** Bump the current version contract, update user/release documentation, and add the `0.1.4` release contract.
-- [ ] **P29-T09** Build and verify Linux/Windows `0.1.4` artifacts, checksums, SBOM, and release metadata.
-- [ ] **P29-T10** Push `main`, tag `v0.1.4`, publish through GitHub Actions, and verify public assets and Linux smoke output.
+- [X] **P29-T09** Build and verify Linux/Windows `0.1.4` artifacts, checksums, SBOM, and release metadata. The final build from source `b1fb796c0c45bacc0ef6560acaa7fc2927828845` passed all seven `SHA256SUMS` entries, Linux `baron 0.1.4` smoke, and ELF/PE artifact checks.
+- [X] **P29-T10** Push `main`, tag `v0.1.4`, publish through GitHub Actions, and verify public assets and Linux smoke output. GitHub Actions run `33043799542` succeeded; public asset download and checksum verification passed.
 
 ### Mandatory tests
 

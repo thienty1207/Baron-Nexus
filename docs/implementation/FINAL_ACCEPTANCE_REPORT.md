@@ -10,6 +10,10 @@
   `.baron/` state remains untracked and intentionally excluded from the
   release.
 - Candidate version: `0.1.4`.
+- `v0.1.4` release source revision: `b1fb796c0c45bacc0ef6560acaa7fc2927828845`.
+- `v0.1.4` public release: <https://github.com/thienty1207/Baron-Nexus/releases/tag/v0.1.4>.
+- `v0.1.4` public asset verification passed on 2026-08-27; the seven
+  checksum entries are recorded in `docs/implementation/RELEASE_0.1.4.md`.
 - The historical `v0.1.1` artifact hashes and directory remain in the dated
   evidence below; the tagged `v0.1.4` workflow rebuilds artifacts from this
   candidate commit.
@@ -86,18 +90,18 @@
   concurrency, SIGKILL, and rollback evidence PASS; live Tencent outage
   recovery also passed on a disposable project, while service restart and
   clean-machine power-loss cases remain pending.
-- P27 release/documentation: local artifact and guidance evidence PASS; final
-  publication gate is implemented and correctly returns BLOCKED while the
-  external acceptance gates below remain unchecked.
+- P27 release/documentation: local artifact and guidance evidence PASS; the
+  publication gate remains correctly BLOCKED while the external acceptance
+  gates below remain unchecked.
 - P28 validated credentials and Ubuntu/Debian first install: local
   implementation, provider/rotation fixtures, sudo ordering, checksum,
   full Go/vet/race-container, shell, installer-preflight, and guidance checks
   PASS; clean-machine and published-provider replacement/outage acceptance
   remain pending.
 - P29 latest-at-run dependency refresh and `0.1.4` release: local resolver,
-  host/Docker refresh, version, documentation, and focused fixture work pass;
-  artifact/public-release verification and clean Ubuntu/Debian, Windows, and
-  full live dependency acceptance remain pending until recorded.
+  host/Docker refresh, version, documentation, artifact build, GitHub Actions
+  publication, public checksum verification, and Linux smoke PASS; clean
+  Ubuntu/Debian, Windows, and full live dependency acceptance remain pending.
 
 ## Verification evidence
 
@@ -249,6 +253,12 @@ revision above. The same fixed binary completed the release portion of a real
 The release directory contains a static Linux ELF and a Windows PE32+ binary;
 the manifest embeds the candidate source revision above.
 
+Post-publication verification on 2026-08-27 downloaded every public `v0.1.4`
+asset from GitHub. All seven entries in `SHA256SUMS` passed, the manifest
+contained source revision `b1fb796c0c45bacc0ef6560acaa7fc2927828845`, and the
+Linux binary reported `baron 0.1.4`. GitHub Actions run `33043799542` completed
+successfully from tag `v0.1.4`.
+
 ## Blocked acceptance gates
 
 These are environment limitations, not converted mock passes:
@@ -314,11 +324,12 @@ These are environment limitations, not converted mock passes:
 
 FINAL STATUS: BLOCKED
 
-Roadmap checklist completion is 416/447 (93.06%); implementation tasks are
-276/282 (97.87%) and mandatory phase tests are 132/157 (84.08%). These are
-transparent checklist percentages, not a release-readiness override.
+Roadmap checklist completion is 428/462 (92.64%); implementation tasks are
+286/292 (97.95%) and mandatory phase tests are 134/162 (82.72%). These are
+the current phase-task counts plus the eight release-audit checklist items;
+they are transparent checklist percentages, not a release-readiness override.
 
-The local implementation and release evidence are ready for external
-acceptance, but this is not a public release decision until the remaining
-Tencent, authenticated DSH/Codex, clean-machine Ubuntu, and Windows runtime
-scenarios are executed and recorded in the roadmap.
+The public `v0.1.4` release and its artifact evidence are verified. Full
+product acceptance remains BLOCKED until the remaining Tencent,
+authenticated DSH/Codex, clean-machine Ubuntu, and Windows runtime scenarios
+are executed and recorded in the roadmap.

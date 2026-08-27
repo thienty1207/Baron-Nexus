@@ -71,5 +71,19 @@ Linux binary. Clean-machine, Windows-runtime, real provider-rotation, and
 full Tencent/CodeGraph completion gates remain separate acceptance evidence;
 they must not be inferred from fixtures or a healthy existing stack.
 
-Final source revision and artifact hashes are recorded here after the release
-commit and public asset verification.
+## Verified publication
+
+- Source revision: `b1fb796c0c45bacc0ef6560acaa7fc2927828845`
+- GitHub Actions release run: `33043799542`
+- Public release: <https://github.com/thienty1207/Baron-Nexus/releases/tag/v0.1.4>
+- Public `SHA256SUMS` entries, independently downloaded and verified on
+  2026-08-27:
+  - `baron-linux-amd64`: `62679c0bc1fb44669a1f6051e049b175285898b67b07b9bee1ada02488cef105`
+  - `baron-windows-amd64.exe`: `d4d5a0b69b44f6b09c35ebc26a1a32bc42f7f06220f1feb60b02646bf6e4ac83`
+  - `install.sh`: `940acb6b68805046010232076ba0d34b76e6b33eb10de77b65ff6991f9d987d0`
+  - `install.ps1`: `60a810ca5f1f1fdac5f0922fcdeaefd96e7a400d25481b55c480621ffc52c7c1`
+  - `release-manifest.json`: `d33c3b346a6cfaebdc499ac80d28321c14707140d4261c18d790b53cbd7afcdf`
+  - `GO_TOOLCHAIN.txt`: `76227025cc0bc2be7067aa45d11e09cacfd49c58f498f4c2e4f6a9872a607bf9`
+  - `SBOM_MODULES.txt`: `a3e949d6f9cb2c9e3cfd72e346db408050a0530f8953f5aa6e382e777747f84c`
+- The downloaded Linux artifact reports `baron 0.1.4`; the Linux and Windows
+  files identify as ELF x86-64 and PE32+ x86-64 respectively.
