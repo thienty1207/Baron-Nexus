@@ -407,6 +407,54 @@ func mergeGitignore(root string) error {
 	return config.AtomicWriteFile(path, []byte(text), 0o644)
 }
 
+// RemoveGitignoreRules removes only the rules that Baron added during setup.
+// User-authored ignore rules and comments remain untouched.
+func RemoveGitignoreRules(root string) (bool, error) {
+	path := filepath.Join(root, ".gitignore")
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, errors.New("refusing to edit .gitignore through a symlink or non-regular file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	rules := make(map[string]struct{})
+	for _, rule := range strings.Split(strings.TrimSpace(baronGitignore), "\n") {
+		rules[rule] = struct{}{}
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	remaining := make([]string, 0, len(lines))
+	changed := false
+	for _, line := range lines {
+		if _, ok := rules[strings.TrimSpace(strings.TrimSuffix(line, "\n"))]; ok {
+			changed = true
+			continue
+		}
+		remaining = append(remaining, line)
+	}
+	if !changed {
+		return false, nil
+	}
+	updated := strings.Join(remaining, "")
+	if strings.TrimSpace(updated) == "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := config.AtomicWriteFile(path, []byte(updated), info.Mode().Perm()); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func containsGitignoreRule(text, rule string) bool {
 	for _, line := range strings.Split(text, "\n") {
 		if strings.TrimSpace(line) == rule {

@@ -3,8 +3,12 @@ package install
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
+	"time"
+
+	"golang.org/x/term"
 )
 
 const (
@@ -19,18 +23,46 @@ type ProgressReporter interface {
 	Download(label string, current, total int64)
 }
 
-type terminalProgress struct {
-	writer io.Writer
-	mu     sync.Mutex
+type ProgressUI struct {
+	writer       io.Writer
+	mu           sync.Mutex
+	interactive  bool
+	spinner      bool
+	spinnerText  string
+	spinnerFrame int
 }
 
-// NewProgressReporter creates the plain-text reporter used by CLI commands.
-// A nil writer disables progress without changing the install behavior.
+// NewProgressUI creates the shared progress and operation renderer. A nil
+// writer disables progress without changing the install behavior.
+func NewProgressUI(writer io.Writer) *ProgressUI {
+	if writer == nil {
+		return nil
+	}
+	return newProgressUI(writer, writerIsTerminal(writer))
+}
+
+// NewProgressReporter keeps the existing reporter API for package callers.
+// The returned UI also supports Run for lifecycle loading messages.
 func NewProgressReporter(writer io.Writer) ProgressReporter {
 	if writer == nil {
 		return nil
 	}
-	return &terminalProgress{writer: writer}
+	return NewProgressUI(writer)
+}
+
+func newProgressUI(writer io.Writer, interactive bool) *ProgressUI {
+	if writer == nil {
+		return nil
+	}
+	return &ProgressUI{writer: writer, interactive: interactive}
+}
+
+func writerIsTerminal(writer io.Writer) bool {
+	file, ok := writer.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(file.Fd()))
 }
 
 func firstProgressReporter(reporters ...ProgressReporter) ProgressReporter {
@@ -40,17 +72,19 @@ func firstProgressReporter(reporters ...ProgressReporter) ProgressReporter {
 	return reporters[0]
 }
 
-func (p *terminalProgress) Step(label string) {
+func (p *ProgressUI) Step(label string) {
 	label = strings.TrimSpace(label)
 	if label == "" {
 		return
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.clearSpinnerLocked()
 	_, _ = fmt.Fprintf(p.writer, "[Baron] %s\n", label)
+	p.renderSpinnerLocked()
 }
 
-func (p *terminalProgress) Download(label string, current, total int64) {
+func (p *ProgressUI) Download(label string, current, total int64) {
 	label = strings.TrimSpace(label)
 	if label == "" {
 		return
@@ -60,15 +94,94 @@ func (p *terminalProgress) Download(label string, current, total int64) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.clearSpinnerLocked()
 	if total > 0 {
 		if current > total {
 			current = total
 		}
 		percent := current * 100 / total
 		_, _ = fmt.Fprintf(p.writer, "[Baron]   %s: %s/%s (%d%%)\n", label, formatProgressBytes(current), formatProgressBytes(total), percent)
+		p.renderSpinnerLocked()
 		return
 	}
 	_, _ = fmt.Fprintf(p.writer, "[Baron]   %s: %s downloaded\n", label, formatProgressBytes(current))
+	p.renderSpinnerLocked()
+}
+
+// Run renders one operation lifecycle. Interactive terminals get a lightweight
+// ASCII spinner; redirected output gets stable line-oriented messages.
+func (p *ProgressUI) Run(label string, action func() error) error {
+	if p == nil || action == nil {
+		if action == nil {
+			return nil
+		}
+		return action()
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = "Baron operation"
+	}
+	if !p.interactive {
+		p.Step(label + "...")
+		err := action()
+		if err != nil {
+			p.Step(label + " failed.")
+			return err
+		}
+		p.Step(label + " complete.")
+		return nil
+	}
+
+	// Run the operation separately so the spinner remains responsive while
+	// package managers or network calls block.
+	done := make(chan error, 1)
+	go func() { done <- action() }()
+	frames := []string{"-", "\\", "|", "/"}
+	p.mu.Lock()
+	p.spinner = true
+	p.spinnerText = fmt.Sprintf("[Baron] %s %s", frames[0], label)
+	p.spinnerFrame = 0
+	_, _ = fmt.Fprintf(p.writer, "\r%s", p.spinnerText)
+	p.mu.Unlock()
+	ticker := time.NewTicker(120 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-done:
+			p.mu.Lock()
+			p.clearSpinnerLocked()
+			p.spinner = false
+			if err != nil {
+				_, _ = fmt.Fprintf(p.writer, "\r[Baron] ! %s failed.\n", label)
+			} else {
+				_, _ = fmt.Fprintf(p.writer, "\r[Baron] + %s complete.\n", label)
+			}
+			p.mu.Unlock()
+			return err
+		case <-ticker.C:
+			p.mu.Lock()
+			if p.spinner {
+				p.spinnerFrame = (p.spinnerFrame + 1) % len(frames)
+				p.spinnerText = fmt.Sprintf("[Baron] %s %s", frames[p.spinnerFrame], label)
+				_, _ = fmt.Fprintf(p.writer, "\r%s", p.spinnerText)
+			}
+			p.mu.Unlock()
+		}
+	}
+}
+
+func (p *ProgressUI) clearSpinnerLocked() {
+	if !p.spinner || p.spinnerText == "" {
+		return
+	}
+	_, _ = fmt.Fprintf(p.writer, "\r%s\r", strings.Repeat(" ", len(p.spinnerText)))
+}
+
+func (p *ProgressUI) renderSpinnerLocked() {
+	if !p.spinner || p.spinnerText == "" {
+		return
+	}
+	_, _ = fmt.Fprintf(p.writer, "\r%s", p.spinnerText)
 }
 
 func formatProgressBytes(value int64) string {

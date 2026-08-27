@@ -23,9 +23,18 @@ const (
 // creating it. The values argument is normally processEnvironment(); keeping
 // it injectable makes path and precedence behavior deterministic in tests.
 func DSHCredentialPath(values map[string]string) (string, error) {
+	home, err := DSHHome(values)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, dshCredentialFile), nil
+}
+
+// DSHHome resolves the official DSH user directory without creating it.
+func DSHHome(values map[string]string) (string, error) {
 	home := strings.TrimSpace(values[dshHomeEnv])
 	if home != "" {
-		return filepath.Join(home, dshCredentialFile), nil
+		return filepath.Clean(home), nil
 	}
 	home = strings.TrimSpace(values["HOME"])
 	if home == "" {
@@ -35,7 +44,7 @@ func DSHCredentialPath(values map[string]string) (string, error) {
 			return "", errors.New("resolve the DSH home directory")
 		}
 	}
-	return filepath.Join(home, ".dsh", dshCredentialFile), nil
+	return filepath.Join(home, ".dsh"), nil
 }
 
 // ReadDSHProviderKey reads the provider key from the launching environment or
@@ -104,6 +113,80 @@ func EnsureDSHProviderKey(values map[string]string, key string) error {
 		return fmt.Errorf("write DSH credentials: %w", err)
 	}
 	return nil
+}
+
+// RemoveDSHProviderKey removes only the DeepSeek provider key from the
+// official credentials file. An absent key is a successful no-op.
+func RemoveDSHProviderKey(values map[string]string) (bool, error) {
+	path, err := DSHCredentialPath(values)
+	if err != nil {
+		return false, err
+	}
+	return RemoveDSHProviderKeyAt(path)
+}
+
+func RemoveDSHProviderKeyAt(path string) (bool, error) {
+	if strings.TrimSpace(path) == "" {
+		return false, errors.New("DSH credential path is required")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, errors.New("refusing to edit DSH credentials through a symlink or non-regular file")
+	}
+	document, exists, err := readDSHCredentialDocument(path)
+	if err != nil || !exists {
+		return false, err
+	}
+	root := document.Content[0]
+	refs, ok := yamlMappingNode(root, "refs")
+	if !ok || refs.Kind != yaml.MappingNode {
+		return false, nil
+	}
+	removed := false
+	content := refs.Content[:0]
+	for index := 0; index+1 < len(refs.Content); index += 2 {
+		if refs.Content[index].Value == dshProviderKeyEnv {
+			removed = true
+			continue
+		}
+		content = append(content, refs.Content[index], refs.Content[index+1])
+	}
+	if !removed {
+		return false, nil
+	}
+	refs.Content = content
+	if len(refs.Content) == 0 && dshCredentialRootOnly(root) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		return true, nil
+	}
+	data, err := yaml.Marshal(&document)
+	if err != nil {
+		return false, fmt.Errorf("encode DSH credentials: %w", err)
+	}
+	if err := config.AtomicWriteFile(path, data, dshCredentialMode); err != nil {
+		return false, fmt.Errorf("write DSH credentials: %w", err)
+	}
+	return true, nil
+}
+
+func dshCredentialRootOnly(root *yaml.Node) bool {
+	if root == nil || root.Kind != yaml.MappingNode {
+		return false
+	}
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		if root.Content[index].Value != "version" && root.Content[index].Value != "refs" {
+			return false
+		}
+	}
+	return true
 }
 
 func readDSHCredentialDocument(path string) (yaml.Node, bool, error) {

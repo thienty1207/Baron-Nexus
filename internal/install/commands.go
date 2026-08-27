@@ -186,6 +186,29 @@ func InstallCodexWithVersion(ctx context.Context, runner CommandRunner, version 
 	return "npm:@openai/codex", reported, nil
 }
 
+// RemoveGlobalNPM removes the listed globally installed packages. It first
+// honors the user's npm prefix and retries through the same sudo boundary used
+// by installation when the prefix is root-owned.
+func RemoveGlobalNPM(ctx context.Context, runner CommandRunner, packages ...string) error {
+	if runner == nil {
+		return errors.New("Node/npm runner is not configured")
+	}
+	if len(packages) == 0 {
+		return nil
+	}
+	args := append([]string{"uninstall", "--global"}, packages...)
+	if _, err := runner.Run(ctx, "npm", args...); err == nil {
+		return nil
+	} else {
+		if _, sudoErr := runner.LookPath("sudo"); sudoErr == nil {
+			if _, retryErr := runSudo(ctx, runner, append([]string{"npm"}, args...)...); retryErr == nil {
+				return nil
+			}
+		}
+		return err
+	}
+}
+
 // installGlobalNPM first honors a user-managed Node installation. On a fresh
 // Ubuntu/Debian host, the automatic Node bootstrap may leave npm's global
 // prefix root-owned; in that case retry the same package operation through

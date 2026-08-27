@@ -19,7 +19,7 @@ func TestCLIExposesFrozenCommandSurface(t *testing.T) {
 	for _, text := range []string{
 		"deepseek-harness", "codex-cli", "tencent-memory", "test", "setup",
 		"status", "doctor", "repair", "backup", "restore", "install", "update",
-		"credentials", "deepseek",
+		"credentials", "deepseek", "permissions", "uninstall",
 	} {
 		if !strings.Contains(out.String(), text) {
 			t.Fatalf("help missing %q:\n%s", text, out.String())
@@ -36,21 +36,87 @@ func TestCLIExposesFrozenCommandSurface(t *testing.T) {
 	}
 }
 
+func TestInitUsesConfiguredLoadingRunner(t *testing.T) {
+	var out bytes.Buffer
+	called := false
+	label := ""
+	code := Run([]string{"deepseek-harness", "init"}, Options{
+		Out: &out,
+		Err: &out,
+		Init: map[string]func() error{
+			"deepseek-harness": func() error { called = true; return nil },
+		},
+		RunWithLoading: func(gotLabel string, action func() error) error {
+			label = gotLabel
+			return action()
+		},
+	})
+	if code != ExitSuccess || !called || label != "Initializing deepseek-harness" {
+		t.Fatalf("init code=%d called=%v label=%q output=%s", code, called, label, out.String())
+	}
+}
+
+func TestUninstallRequiresExactConfirmation(t *testing.T) {
+	var out bytes.Buffer
+	called := false
+	code := Run([]string{"uninstall"}, Options{
+		In:            strings.NewReader("UNINSTALL BARON\nextra\n"),
+		Out:           &out,
+		Err:           &out,
+		UninstallPlan: func(bool) (string, error) { return "Would remove Baron resources.", nil },
+		Uninstall:     func(bool) (string, error) { called = true; return "removed", nil },
+	})
+	if code != ExitSuccess || !called || !strings.Contains(out.String(), "removed") {
+		t.Fatalf("confirmed uninstall code=%d called=%v output=%s", code, called, out.String())
+	}
+
+	out.Reset()
+	called = false
+	code = Run([]string{"uninstall"}, Options{
+		In:            strings.NewReader("cancel\n"),
+		Out:           &out,
+		Err:           &out,
+		UninstallPlan: func(bool) (string, error) { return "Would remove Baron resources.", nil },
+		Uninstall:     func(bool) (string, error) { called = true; return "removed", nil },
+	})
+	if code != ExitUsage || called || !strings.Contains(out.String(), "UNINSTALL BARON") {
+		t.Fatalf("unconfirmed uninstall code=%d called=%v output=%s", code, called, out.String())
+	}
+}
+
+func TestPermissionsCommandsInvokeDedicatedHandlers(t *testing.T) {
+	var out bytes.Buffer
+	called := ""
+	options := Options{
+		Out:                &out,
+		Err:                &out,
+		PermissionsEnable:  func() (string, error) { called = "enable"; return "enabled", nil },
+		PermissionsDisable: func() (string, error) { called = "disable"; return "disabled", nil },
+		PermissionsStatus:  func() (string, error) { called = "status"; return "status", nil },
+	}
+	for _, command := range []string{"enable", "disable", "status"} {
+		called = ""
+		if code := Run([]string{"permissions", command}, options); code != ExitSuccess || called != command {
+			t.Fatalf("permissions %s code=%d called=%q output=%s", command, code, called, out.String())
+		}
+	}
+}
+
 func TestVersionFlagUsesBaronFormat(t *testing.T) {
 	var out bytes.Buffer
-	cmd := New(Options{Version: "0.1.6", Out: &out, Err: &out})
+	cmd := New(Options{Version: "0.1.7", Out: &out, Err: &out})
 	cmd.SetArgs([]string{"--version"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(out.String()); got != "baron 0.1.6" {
+	if got := strings.TrimSpace(out.String()); got != "baron 0.1.7" {
 		t.Fatalf("version output=%q", got)
 	}
 }
 
-func TestDefaultVersionIsBaron016(t *testing.T) {
-	if version.Value != "0.1.6" {
-		t.Fatalf("default version=%q, want 0.1.6", version.Value)
+func TestDefaultVersionIsBaron017(t *testing.T) {
+	if version.Value != "0.1.7" {
+		t.Fatalf("default version=%q, want 0.1.7", version.Value)
 	}
 }
 
@@ -58,7 +124,7 @@ func TestInstallAndUpdateCommandsInvokeDedicatedHandlers(t *testing.T) {
 	var out bytes.Buffer
 	installCalled, updateCalled := false, false
 	options := Options{
-		Version: "0.1.6", Out: &out, Err: &out,
+		Version: "0.1.7", Out: &out, Err: &out,
 		Install: func() (string, error) { installCalled = true; return "install ok", nil },
 		Update:  func() (string, error) { updateCalled = true; return "update ok", nil },
 	}

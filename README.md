@@ -1,6 +1,7 @@
 # Baron Nexus
 
-Current release: `0.1.6` — adds visible bootstrap/download progress while retaining the latest-at-run
+Current release: `0.1.7` — adds loading feedback for initialization, explicit opt-in
+auto-accept launchers, and a guarded uninstall while retaining the latest-at-run
 dependency refresh, concise DeepSeek key rotation, and automated
 Ubuntu/Debian first-install bootstrap.
 
@@ -31,7 +32,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.6`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.7`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
 latest Node/uv releases at run time, and refreshes Docker Engine/Compose,
@@ -60,7 +61,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.6`. The PowerShell installer resolves the
+The expected output is `baron 0.1.7`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
@@ -124,6 +125,11 @@ Example:
 [Baron] uv archive (attempt 1) downloaded.
 [Baron] Installing verified uv and uvx...
 ```
+
+All long-running initializer, setup, repair, install, update, and uninstall
+commands also show an ASCII loading indicator on an interactive terminal and
+stable start/completion lines when output is redirected. The UI never prints
+credentials or raw child-process output.
 
 ### 3. Later version refresh: `baron update`
 
@@ -213,6 +219,21 @@ this prerequisite without silently claiming to install Windows components.
 Use `dsh web` or `codex` normally after setup. Baron hooks are short-lived and
 invoke the Go binary on demand.
 
+To explicitly run DSH and Codex without their approval prompts, create
+Baron-owned launchers:
+
+```text
+baron permissions enable
+```
+
+Then add the printed Baron `bin` directory to `PATH` and run `dsh-auto` or
+`codex-auto`. DSH receives `DSH_PERMISSION_MODE=danger-full-access`; Codex
+receives `--sandbox danger-full-access --ask-for-approval never`. These launchers
+are opt-in and do not replace the normal `dsh`/`codex` commands or edit shell
+profiles. `baron permissions disable` removes only these launchers, and
+`baron permissions status` reports their state. The full-access mode is unsafe
+for untrusted repositories.
+
 Codex Desktop boundary: Baron currently supports the Codex CLI hook contract
 and does not claim a validated Codex Desktop lifecycle. If the CLI reports a
 project-hook trust/enablement prompt, approve the Baron project hooks once in
@@ -240,6 +261,18 @@ excludes plaintext credentials; re-keying may be required after restore. If a
 restore target already exists, Baron stops safely; choose
 `baron restore <archive> --replace-existing` only when you want the current
 state moved to a recoverable sibling backup first.
+
+To remove Baron, its registered project state, managed hooks, DSH key, Tencent
+deployment, npm packages, adapters, receipts, and its own binary, run:
+
+```text
+baron uninstall
+```
+
+Type `UNINSTALL BARON` when prompted, or pass `--yes` for an explicit scripted
+run. Add `--purge-shared` only when you also want to delete the complete DSH and
+Codex user directories. Baron does not silently remove shared Node, Docker,
+WSL, or unrelated npm packages; those may be used by other applications.
 
 ## Troubleshooting
 

@@ -46,7 +46,7 @@ try {
     } elseif ($Version -match '^[0-9]+\.[0-9]+\.[0-9]+$') {
       $baseUrl = "https://github.com/$Repository/releases/download/v$Version"
     } else {
-      throw "Version must be latest or a semantic version such as 0.1.6."
+      throw "Version must be latest or a semantic version such as 0.1.7."
     }
     $manifestPath = Join-Path $tempRoot "release-manifest.json"
     $sumsPath = Join-Path $tempRoot "SHA256SUMS"

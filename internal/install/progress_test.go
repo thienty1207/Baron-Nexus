@@ -2,9 +2,11 @@ package install
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestTerminalProgressReportsStepsAndDownloadProgress(t *testing.T) {
@@ -36,6 +38,36 @@ func TestProgressReaderDoesNotDuplicateFinalUpdate(t *testing.T) {
 	}
 	if got := strings.Count(output.String(), "archive:"); got != 1 {
 		t.Fatalf("final progress updates=%d, want 1:\n%s", got, output.String())
+	}
+}
+
+func TestLoadingUIReportsLineLifecycleWhenOutputIsNotATerminal(t *testing.T) {
+	var output bytes.Buffer
+	ui := newProgressUI(&output, false)
+	if err := ui.Run("Initializing DSH", func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	for _, want := range []string{"Initializing DSH...", "Initializing DSH complete."} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("loading output missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestLoadingUIUsesSpinnerAndReportsFailureOnInteractiveOutput(t *testing.T) {
+	var output bytes.Buffer
+	ui := newProgressUI(&output, true)
+	wantErr := errors.New("operation failed")
+	if err := ui.Run("Initializing Codex", func() error {
+		time.Sleep(150 * time.Millisecond)
+		return wantErr
+	}); !errors.Is(err, wantErr) {
+		t.Fatalf("loading error=%v, want %v", err, wantErr)
+	}
+	got := output.String()
+	if !strings.Contains(got, "Initializing Codex") || !strings.Contains(got, "failed.") || !strings.Contains(got, "\r") {
+		t.Fatalf("interactive loading output is incomplete:\n%q", got)
 	}
 }
 

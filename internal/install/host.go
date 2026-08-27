@@ -157,6 +157,12 @@ func runSudo(ctx context.Context, runner CommandRunner, args ...string) (string,
 	return output, nil
 }
 
+// RunSudo exposes the existing password boundary to cleanup operations. The
+// runner, not Baron, owns the sudo prompt and Baron never receives the secret.
+func RunSudo(ctx context.Context, runner CommandRunner, args ...string) (string, error) {
+	return runSudo(ctx, runner, args...)
+}
+
 func runSudoProgress(ctx context.Context, runner CommandRunner, reporter ProgressReporter, label string, args ...string) (string, error) {
 	reportStep(reporter, label+"...")
 	output, err := runSudo(ctx, runner, args...)

@@ -394,11 +394,19 @@ func TestApplicationSetupAndHookRoundTrip(t *testing.T) {
 	application.ProjectProvisioner = func(context.Context, string, string) (contracts.ProjectBinding, error) {
 		return contracts.ProjectBinding{TeamID: "team-a", AgentID: "agent-a", UserID: "user-a"}, nil
 	}
-	if _, err := application.SetupProject(context.Background(), root); err != nil {
+	configured, err := application.SetupProject(context.Background(), root)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".baron", "runtime", "state.db")); err != nil {
 		t.Fatal(err)
+	}
+	global, err := config.LoadGlobalState(application.GlobalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if global.ProjectRoots[configured.ProjectID] != root {
+		t.Fatalf("project root was not registered for uninstall: %#v", global.ProjectRoots)
 	}
 	var output bytes.Buffer
 	input := bytes.NewBufferString(`{"session_id":"ses-1","idempotency_key":"app-event-1","payload":{"command":"go test ./...","exit_code":1,"summary":"failed"}}`)
@@ -418,6 +426,41 @@ func TestApplicationSetupAndHookRoundTrip(t *testing.T) {
 	}
 	if state["BARON_TENCENT_AGENT_ID"] != "agent-a" {
 		t.Fatalf("binding was not written: %#v", state)
+	}
+}
+
+func TestUninstallOptionsPreferRecordedCustomToolHomes(t *testing.T) {
+	root := t.TempDir()
+	dshHome := filepath.Join(root, "custom-dsh")
+	codexHome := filepath.Join(root, "custom-codex")
+	globalPath := filepath.Join(root, "global.json")
+	if err := config.SaveGlobalState(globalPath, config.GlobalState{
+		DSHHomePath:         dshHome,
+		DSHProfilePatchPath: filepath.Join(dshHome, "profiles", "web", "cordis.patch.yml"),
+		CodexHomePath:       codexHome,
+		CodexHooksPath:      filepath.Join(codexHome, "hooks.json"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DSH_HOME", filepath.Join(root, "wrong-dsh"))
+	t.Setenv("CODEX_HOME", filepath.Join(root, "wrong-codex"))
+	application := New()
+	application.GlobalPath = globalPath
+	application.ExecutablePath = filepath.Join(root, "baron")
+	options, err := application.uninstallOptions(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.DSHHome != dshHome || options.DSHCredentialPath != filepath.Join(dshHome, ".credentials.yaml") {
+		t.Fatalf("recorded DSH home was ignored: %#v", options)
+	}
+	if options.CodexHome != codexHome || options.CodexHooksPath != filepath.Join(codexHome, "hooks.json") {
+		t.Fatalf("recorded Codex home was ignored: %#v", options)
+	}
+	for _, path := range options.DSHProfilePatchPaths {
+		if !strings.HasPrefix(path, dshHome+string(filepath.Separator)) {
+			t.Fatalf("DSH patch escaped recorded home: %#v", options.DSHProfilePatchPaths)
+		}
 	}
 }
 

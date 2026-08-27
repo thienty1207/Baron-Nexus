@@ -16,6 +16,17 @@ var codexEvents = []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "Po
 
 const codexHookTimeoutSeconds = 3
 
+const baronDSHProfilePatchBlock = `# baron-owned: ddg-search
+- insert:
+    - id: baron-ddg-search
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: 'ddg-search'
+        transport: 'stdio'
+        command: 'uvx'
+        args: ['duckduckgo-mcp-server']
+`
+
 func MergeCodexHooks(path, binary string) error {
 	if binary == "" {
 		binary = "baron"
@@ -70,6 +81,122 @@ func MergeCodexHooks(path, binary string) error {
 		hooks[event] = items
 	}
 	return writeJSONMap(path, root, 0o600)
+}
+
+// RemoveCodexHooks removes only Baron lifecycle hook entries and preserves
+// unrelated user hooks. It is safe to call repeatedly after the file is gone.
+func RemoveCodexHooks(path, binary string) (bool, error) {
+	if path == "" {
+		return false, errors.New("Codex hooks path is required")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, errors.New("refusing to edit Codex hooks through a symlink or non-regular file")
+	}
+	if binary == "" {
+		binary = "baron"
+	}
+	root, err := readJSONMap(path)
+	if err != nil {
+		return false, err
+	}
+	hooks, ok := root["hooks"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	changed := false
+	for event, raw := range hooks {
+		items, ok := raw.([]any)
+		if !ok {
+			continue
+		}
+		filtered := make([]any, 0, len(items))
+		for _, item := range items {
+			kept, remove, itemChanged := removeBaronHookEntry(item, binary)
+			if remove {
+				changed = true
+				continue
+			}
+			if itemChanged {
+				changed = true
+			}
+			filtered = append(filtered, kept)
+		}
+		if len(filtered) == 0 {
+			delete(hooks, event)
+			if len(items) > 0 {
+				changed = true
+			}
+		} else {
+			hooks[event] = filtered
+		}
+	}
+	if len(hooks) == 0 {
+		delete(root, "hooks")
+	}
+	if !changed {
+		return false, nil
+	}
+	if len(root) == 0 {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := writeJSONMap(path, root, info.Mode().Perm()); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func removeBaronHookEntry(raw any, binary string) (any, bool, bool) {
+	entry, ok := raw.(map[string]any)
+	if !ok {
+		return raw, false, false
+	}
+	if command, ok := entry["command"].(string); ok && isBaronCodexHook(command, binary) {
+		return nil, true, false
+	}
+	nested, hasNested := entry["hooks"].([]any)
+	if !hasNested {
+		return raw, false, false
+	}
+	filtered := make([]any, 0, len(nested))
+	changed := false
+	for _, item := range nested {
+		commandEntry, ok := item.(map[string]any)
+		if ok {
+			if command, commandOK := commandEntry["command"].(string); commandOK && isBaronCodexHook(command, binary) {
+				changed = true
+				continue
+			}
+		}
+		filtered = append(filtered, item)
+	}
+	if !changed {
+		return raw, false, false
+	}
+	if len(filtered) > 0 {
+		entry["hooks"] = filtered
+		return entry, false, true
+	}
+	delete(entry, "hooks")
+	for key := range entry {
+		if key != "statusMessage" && key != "timeout" {
+			return entry, false, true
+		}
+	}
+	return nil, true, false
+}
+
+func isBaronCodexHook(command, binary string) bool {
+	return strings.HasPrefix(strings.TrimSpace(command), strings.TrimSpace(binary)+" hook codex ")
 }
 
 type DSHOptions struct {
@@ -128,16 +255,6 @@ func EnsureDSHProfilePatch(path string) error {
 			return err
 		}
 	}
-	const block = `# baron-owned: ddg-search
-- insert:
-    - id: baron-ddg-search
-      name: '@deepseek-ai/dsh-mcp-client'
-      config:
-        serverName: 'ddg-search'
-        transport: 'stdio'
-        command: 'uvx'
-        args: ['duckduckgo-mcp-server']
-`
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
@@ -146,12 +263,72 @@ func EnsureDSHProfilePatch(path string) error {
 	// invalid YAML document, so replace only that empty-list marker while
 	// preserving the user/header comments and any existing patch rows.
 	text = replaceEmptyDSHPatchSequence(text)
-	text += block
+	text += baronDSHProfilePatchBlock
 	perm := os.FileMode(0o600)
 	if info, statErr := os.Stat(path); statErr == nil {
 		perm = info.Mode().Perm()
 	}
 	return config.AtomicWriteFile(path, []byte(text), perm)
+}
+
+// RemoveDSHProfilePatch removes the Baron-owned marker block while preserving
+// all user-authored profile patch content.
+func RemoveDSHProfilePatch(path string) (bool, error) {
+	if path == "" {
+		return false, errors.New("DSH profile patch path is required")
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return false, errors.New("refusing to edit DSH profile patch through a symlink or non-regular file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	lines := strings.SplitAfter(string(data), "\n")
+	expected := strings.Split(strings.TrimSuffix(baronDSHProfilePatchBlock, "\n"), "\n")
+	start := -1
+	for index, line := range lines {
+		if strings.TrimSpace(line) != "# baron-owned: ddg-search" {
+			continue
+		}
+		if index+len(expected) > len(lines) {
+			continue
+		}
+		matches := true
+		for offset, expectedLine := range expected {
+			if strings.TrimSpace(lines[index+offset]) != strings.TrimSpace(expectedLine) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			start = index
+			break
+		}
+	}
+	if start < 0 {
+		return false, nil
+	}
+	remaining := append([]string(nil), lines[:start]...)
+	remaining = append(remaining, lines[start+len(expected):]...)
+	updated := strings.Join(remaining, "")
+	if strings.TrimSpace(updated) == "" {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := config.AtomicWriteFile(path, []byte(updated), info.Mode().Perm()); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func replaceEmptyDSHPatchSequence(text string) string {

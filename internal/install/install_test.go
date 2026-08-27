@@ -359,6 +359,31 @@ func TestDSHProfilePatchPreservesUserRowsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestRemoveDSHProfilePatchPreservesContentAfterBaronBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cordis.patch.yml")
+	if err := EnsureDSHProfilePatch(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, []byte("\nuser-after: true\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := RemoveDSHProfilePatch(path)
+	if err != nil || !changed {
+		t.Fatalf("remove changed=%v err=%v", changed, err)
+	}
+	data, err = os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "baron-owned: ddg-search") || !strings.Contains(string(data), "user-after: true") {
+		t.Fatalf("user content after Baron block was not preserved: %s", data)
+	}
+}
+
 func TestDSHProfilePatchReplacesFreshEmptySequenceWithoutCreatingInvalidYAML(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "profiles", "web", "cordis.patch.yml")

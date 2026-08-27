@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,12 @@ type Options struct {
 	RestoreWithOptions func(archive string, replaceExisting bool) error
 	Install            func() (string, error)
 	Update             func() (string, error)
+	RunWithLoading     func(label string, action func() error) error
+	PermissionsEnable  func() (string, error)
+	PermissionsDisable func() (string, error)
+	PermissionsStatus  func() (string, error)
+	UninstallPlan      func(purgeShared bool) (string, error)
+	Uninstall          func(purgeShared bool) (string, error)
 	SetCredential      func(provider string) error
 	Init               map[string]func() error
 	InitNotice         map[string]string
@@ -105,14 +112,17 @@ func New(options Options) *cobra.Command {
 			path := ""
 			if len(args) == 1 {
 				path = args[0]
-				if !filepath.IsAbs(path) {
+				if !isAbsolutePath(path) {
 					return errors.New("setup path must be an existing absolute path")
 				}
 			}
-			if options.Setup != nil {
-				if err := options.Setup(path); err != nil {
-					return err
+			if err := runWithLoading(options, "Setting up Baron project", func() error {
+				if options.Setup != nil {
+					return options.Setup(path)
 				}
+				return nil
+			}); err != nil {
+				return err
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Setup complete.")
 			return nil
@@ -126,10 +136,13 @@ func New(options Options) *cobra.Command {
 		Use:   "repair",
 		Short: "Repair Baron-owned configuration and integrations.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if options.Repair != nil {
-				if err := options.Repair(); err != nil {
-					return err
+			if err := runWithLoading(options, "Repairing Baron integrations", func() error {
+				if options.Repair != nil {
+					return options.Repair()
 				}
+				return nil
+			}); err != nil {
+				return err
 			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Repair complete.")
 			return nil
@@ -174,8 +187,10 @@ func New(options Options) *cobra.Command {
 	}
 	restore.Flags().BoolVar(&replaceExisting, "replace-existing", false, "replace an existing Baron state only after moving it to a recoverable sibling backup")
 	root.AddCommand(restore)
-	root.AddCommand(binaryCommand("install", "Download and install the latest verified Baron release.", options.Install))
-	root.AddCommand(binaryCommand("update", "Download and atomically update to the latest verified Baron release.", options.Update))
+	root.AddCommand(binaryCommand("install", "Download and install the latest verified Baron release.", options.Install, options.RunWithLoading))
+	root.AddCommand(binaryCommand("update", "Download and atomically update to the latest verified Baron release.", options.Update, options.RunWithLoading))
+	root.AddCommand(permissionsCommand(options))
+	root.AddCommand(uninstallCommand(options))
 
 	deepseekCommand := &cobra.Command{
 		Use:   "deepseek",
@@ -241,7 +256,7 @@ func runCredentialRotation(cmd *cobra.Command, options Options, provider string)
 	return nil
 }
 
-func binaryCommand(name, short string, handler func() (string, error)) *cobra.Command {
+func binaryCommand(name, short string, handler func() (string, error), loader func(string, func() error) error) *cobra.Command {
 	return &cobra.Command{
 		Use:   name,
 		Short: short,
@@ -250,8 +265,17 @@ func binaryCommand(name, short string, handler func() (string, error)) *cobra.Co
 			if handler == nil {
 				return errors.New("Baron binary release handler is not configured")
 			}
-			message, err := handler()
-			if err != nil {
+			message := ""
+			action := func() error {
+				var err error
+				message, err = handler()
+				return err
+			}
+			if loader != nil {
+				if err := loader("Running Baron "+name, action); err != nil {
+					return err
+				}
+			} else if err := action(); err != nil {
 				return err
 			}
 			if strings.TrimSpace(message) == "" {
@@ -263,16 +287,26 @@ func binaryCommand(name, short string, handler func() (string, error)) *cobra.Co
 	}
 }
 
+func runWithLoading(options Options, label string, action func() error) error {
+	if options.RunWithLoading == nil {
+		return action()
+	}
+	return options.RunWithLoading(label, action)
+}
+
 func initCommand(name string, options Options, short string) *cobra.Command {
 	parent := &cobra.Command{Use: name, Short: short}
 	child := &cobra.Command{
 		Use:   "init",
 		Short: short,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if options.Init != nil && options.Init[name] != nil {
-				if err := options.Init[name](); err != nil {
-					return err
+			if err := runWithLoading(options, "Initializing "+name, func() error {
+				if options.Init != nil && options.Init[name] != nil {
+					return options.Init[name]()
 				}
+				return nil
+			}); err != nil {
+				return err
 			}
 			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "%s initialization complete.\n", name)
 			notice := options.InitNotice[name]
@@ -287,6 +321,95 @@ func initCommand(name string, options Options, short string) *cobra.Command {
 	}
 	parent.AddCommand(child)
 	return parent
+}
+
+func permissionsCommand(options Options) *cobra.Command {
+	parent := &cobra.Command{Use: "permissions", Short: "Manage explicit Baron auto-accept launchers."}
+	for _, item := range []struct {
+		name    string
+		handler func() (string, error)
+	}{
+		{name: "enable", handler: options.PermissionsEnable},
+		{name: "disable", handler: options.PermissionsDisable},
+		{name: "status", handler: options.PermissionsStatus},
+	} {
+		item := item
+		parent.AddCommand(&cobra.Command{
+			Use:   item.name,
+			Short: item.name + " Baron-owned explicit auto-accept launchers.",
+			Args:  exactArgs(0, "permissions "+item.name+" accepts no arguments"),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				if item.handler == nil {
+					return errors.New("permission launcher handler is not configured")
+				}
+				message, err := item.handler()
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(message) != "" {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), message)
+				}
+				return nil
+			},
+		})
+	}
+	return parent
+}
+
+const uninstallConfirmation = "UNINSTALL BARON"
+
+func uninstallCommand(options Options) *cobra.Command {
+	var yes, purgeShared bool
+	command := &cobra.Command{
+		Use:   "uninstall",
+		Short: "Remove Baron-managed state and integrations.",
+		Args:  exactArgs(0, "uninstall accepts no arguments"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.Uninstall == nil {
+				return errors.New("uninstall handler is not configured")
+			}
+			if !yes {
+				plan := "Baron uninstall will remove Baron-managed files, integrations, and installed packages."
+				if options.UninstallPlan != nil {
+					var err error
+					plan, err = options.UninstallPlan(purgeShared)
+					if err != nil {
+						return err
+					}
+				}
+				if strings.TrimSpace(plan) != "" {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), plan)
+				}
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Type %q to continue: ", uninstallConfirmation)
+				line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+				if err != nil && !errors.Is(err, io.EOF) {
+					return fmt.Errorf("read uninstall confirmation: %w", err)
+				}
+				if strings.TrimSpace(line) != uninstallConfirmation {
+					return errors.New("uninstall cancelled; exact confirmation is required")
+				}
+			}
+			message := ""
+			action := func() error {
+				var err error
+				message, err = options.Uninstall(purgeShared)
+				return err
+			}
+			if err := runWithLoading(options, "Uninstalling Baron", action); err != nil {
+				if strings.TrimSpace(message) != "" {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), message)
+				}
+				return err
+			}
+			if strings.TrimSpace(message) != "" {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), message)
+			}
+			return nil
+		},
+	}
+	command.Flags().BoolVar(&yes, "yes", false, "skip the interactive confirmation prompt")
+	command.Flags().BoolVar(&purgeShared, "purge-shared", false, "also remove shared DSH/Codex homes; keep shared Node/Docker/WSL tools")
+	return command
 }
 
 func readinessCommand(name, short string, handler func(bool) error, output func(bool) (string, error), out io.Writer) *cobra.Command {
@@ -317,6 +440,10 @@ func readinessCommand(name, short string, handler func(bool) error, output func(
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "render machine-readable JSON")
 	return cmd
+}
+
+func isAbsolutePath(path string) bool {
+	return filepath.IsAbs(path) || strings.HasPrefix(path, "/")
 }
 
 func exactArgs(count int, message string) cobra.PositionalArgs {

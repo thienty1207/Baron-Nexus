@@ -25,9 +25,11 @@ import (
 	"github.com/baron-shared-brain/baron/internal/install"
 	"github.com/baron-shared-brain/baron/internal/knowledge"
 	"github.com/baron-shared-brain/baron/internal/memory/tencent"
+	"github.com/baron-shared-brain/baron/internal/permissions"
 	"github.com/baron-shared-brain/baron/internal/project"
 	"github.com/baron-shared-brain/baron/internal/release"
 	"github.com/baron-shared-brain/baron/internal/storage"
+	baronuninstall "github.com/baron-shared-brain/baron/internal/uninstall"
 	"github.com/baron-shared-brain/baron/internal/version"
 )
 
@@ -52,7 +54,17 @@ type App struct {
 }
 
 func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
-	progress := install.NewProgressReporter(out)
+	ui := install.NewProgressUI(out)
+	var progress install.ProgressReporter
+	if ui != nil {
+		progress = ui
+	}
+	runWithLoading := func(label string, action func() error) error {
+		if ui == nil {
+			return action()
+		}
+		return ui.Run(label, action)
+	}
 	return cli.Options{
 		Version: version.Value,
 		Out:     out, Err: errOut, In: a.Input,
@@ -73,7 +85,23 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 			message, err := a.installAndBootstrap(context.Background(), progress)
 			return message, classifyError(err)
 		},
-		Update:        func() (string, error) { return a.installBaronBinary(false, progress) },
+		Update:         func() (string, error) { return a.installBaronBinary(false, progress) },
+		RunWithLoading: runWithLoading,
+		PermissionsEnable: func() (string, error) {
+			return a.enablePermissions()
+		},
+		PermissionsDisable: func() (string, error) {
+			return a.disablePermissions()
+		},
+		PermissionsStatus: func() (string, error) {
+			return a.permissionsStatus()
+		},
+		UninstallPlan: func(purgeShared bool) (string, error) {
+			return a.uninstallPlan(purgeShared)
+		},
+		Uninstall: func(purgeShared bool) (string, error) {
+			return a.uninstall(purgeShared)
+		},
 		SetCredential: func(provider string) error { return classifyError(a.SetCredential(provider)) },
 		Hook: func(client, event string, input io.Reader, output io.Writer) error {
 			return a.HandleHook(context.Background(), client, event, "", input, output)
@@ -618,6 +646,167 @@ func (a *App) globalPath() (string, error) {
 	return config.DefaultGlobalStatePath()
 }
 
+func (a *App) permissionDirectory() (string, error) {
+	path, err := a.globalPath()
+	if err != nil {
+		return "", err
+	}
+	return permissions.DefaultDirectory(path)
+}
+
+func (a *App) enablePermissions() (string, error) {
+	directory, err := a.permissionDirectory()
+	if err != nil {
+		return "", err
+	}
+	status, err := permissions.Enable(directory)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Explicit auto-accept launchers enabled for DSH and Codex at %s.\nWARNING: these launchers disable approval prompts and sandbox restrictions.\n%s", status.Directory, permissions.Instructions(status.Directory)), nil
+}
+
+func (a *App) disablePermissions() (string, error) {
+	directory, err := a.permissionDirectory()
+	if err != nil {
+		return "", err
+	}
+	status, err := permissions.Disable(directory)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Explicit auto-accept launchers disabled at %s.", status.Directory), nil
+}
+
+func (a *App) permissionsStatus() (string, error) {
+	directory, err := a.permissionDirectory()
+	if err != nil {
+		return "", err
+	}
+	status := permissions.Inspect(directory)
+	return fmt.Sprintf("Auto-accept DSH: %t (%s)\nAuto-accept Codex: %t (%s)", status.DSHEnabled, status.DSHPath, status.CodexEnabled, status.CodexPath), nil
+}
+
+func (a *App) uninstallOptions(purgeShared bool) (baronuninstall.Options, error) {
+	global, globalPath, err := a.loadGlobal()
+	if err != nil {
+		return baronuninstall.Options{}, err
+	}
+	environment := processEnvironment()
+	dshHome, err := install.DSHHome(environment)
+	if err != nil {
+		return baronuninstall.Options{}, err
+	}
+	if global.DSHHomePath != "" {
+		dshHome = filepath.Clean(global.DSHHomePath)
+	} else if global.DSHProfilePatchPath != "" {
+		dshHome = filepath.Dir(filepath.Dir(filepath.Dir(global.DSHProfilePatchPath)))
+	}
+	dshCredentialPath, err := install.DSHCredentialPath(environment)
+	if err != nil {
+		return baronuninstall.Options{}, err
+	}
+	if global.DSHHomePath != "" || global.DSHProfilePatchPath != "" {
+		dshCredentialPath = filepath.Join(dshHome, ".credentials.yaml")
+	}
+	codexHome, err := install.CodexHome()
+	if err != nil {
+		return baronuninstall.Options{}, err
+	}
+	if global.CodexHomePath != "" {
+		codexHome = filepath.Clean(global.CodexHomePath)
+	} else if global.CodexHooksPath != "" {
+		codexHome = filepath.Dir(global.CodexHooksPath)
+	}
+	codexHooksPath := global.CodexHooksPath
+	if codexHooksPath == "" {
+		codexHooksPath, err = install.CodexHooksPath()
+		if err != nil {
+			return baronuninstall.Options{}, err
+		}
+	}
+	permissionDirectory, err := permissions.DefaultDirectory(globalPath)
+	if err != nil {
+		return baronuninstall.Options{}, err
+	}
+	patchPaths := make([]string, 0, 3)
+	if global.DSHProfilePatchPath != "" {
+		patchPaths = append(patchPaths, global.DSHProfilePatchPath)
+	}
+	patchHome := ""
+	if global.DSHHomePath != "" || global.DSHProfilePatchPath != "" {
+		patchHome = dshHome
+	}
+	for _, profile := range []string{"web", "headless"} {
+		var patch string
+		if patchHome != "" {
+			patch = filepath.Join(patchHome, "profiles", profile, "cordis.patch.yml")
+		} else if patchPath, patchErr := install.DSHProfilePatchPath(profile); patchErr == nil {
+			patch = patchPath
+		}
+		if patch != "" && !containsStringValue(patchPaths, patch) {
+			patchPaths = append(patchPaths, patch)
+		}
+	}
+	projectRoots := make([]string, 0, len(global.ProjectRoots)+1)
+	for _, root := range global.ProjectRoots {
+		if !containsStringValue(projectRoots, root) {
+			projectRoots = append(projectRoots, root)
+		}
+	}
+	if current, resolveErr := project.Resolve(""); resolveErr == nil && !containsStringValue(projectRoots, current.Root) {
+		projectRoots = append(projectRoots, current.Root)
+	}
+	executablePath := a.ExecutablePath
+	if executablePath == "" {
+		executablePath, err = release.CurrentExecutablePath()
+		if err != nil {
+			return baronuninstall.Options{}, err
+		}
+	}
+	return baronuninstall.Options{
+		GlobalPath:           globalPath,
+		DSHConfigPath:        global.DSHConfigPath,
+		DSHHome:              dshHome,
+		DSHCredentialPath:    dshCredentialPath,
+		DSHProfilePatchPaths: patchPaths,
+		CodexHome:            codexHome,
+		CodexHooksPath:       codexHooksPath,
+		CodexAdapterPath:     global.CodexAdapterPath,
+		PermissionsDirectory: permissionDirectory,
+		TencentInstallPath:   global.TencentInstallPath,
+		Receipts:             append([]string(nil), global.Receipts...),
+		ProjectRoots:         projectRoots,
+		ExecutablePath:       executablePath,
+		PurgeShared:          purgeShared,
+		Runner:               a.commandRunner(),
+	}, nil
+}
+
+func (a *App) uninstallPlan(purgeShared bool) (string, error) {
+	options, err := a.uninstallOptions(purgeShared)
+	if err != nil {
+		return "", err
+	}
+	plan, err := baronuninstall.BuildPlan(options)
+	if err != nil {
+		return "", err
+	}
+	return plan.String(), nil
+}
+
+func (a *App) uninstall(purgeShared bool) (string, error) {
+	options, err := a.uninstallOptions(purgeShared)
+	if err != nil {
+		return "", err
+	}
+	report, err := baronuninstall.Execute(context.Background(), options)
+	if err != nil {
+		return report.String(), err
+	}
+	return report.String(), nil
+}
+
 func (a *App) loadGlobal() (config.GlobalState, string, error) {
 	path, err := a.globalPath()
 	if err != nil {
@@ -682,6 +871,7 @@ func (a *App) SetupProject(ctx context.Context, path string) (project.Project, e
 		// continuity or blocking the agent session.
 	}
 	global.ProjectBindings[result.ProjectID] = result.Binding
+	global.ProjectRoots[result.ProjectID] = result.Root
 	if err := a.saveGlobal(globalPath, global); err != nil {
 		return project.Project{}, err
 	}
@@ -877,6 +1067,9 @@ func (a *App) DSHInit() error {
 	if err != nil {
 		return err
 	}
+	if dshHome, homeErr := install.DSHHome(processEnvironment()); homeErr == nil {
+		global.DSHHomePath = dshHome
+	}
 	dshVersion, err := install.InstallDSHWithVersion(context.Background(), a.commandRunner(), install.LatestDependencySelector)
 	if err != nil {
 		return err
@@ -945,6 +1138,11 @@ func (a *App) CodexInit() error {
 	if err != nil {
 		return err
 	}
+	codexHome, err := install.CodexHome()
+	if err != nil {
+		return err
+	}
+	global.CodexHomePath = codexHome
 	codexHooksPath, err := install.CodexHooksPath()
 	if err != nil {
 		return err
@@ -1367,6 +1565,15 @@ func appendReceipt(receipts []string, path string) []string {
 		}
 	}
 	return append(receipts, path)
+}
+
+func containsStringValue(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func firstNonEmptyString(values ...string) string {

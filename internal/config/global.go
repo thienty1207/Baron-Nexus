@@ -15,13 +15,16 @@ type GlobalState struct {
 	Version             int                                 `json:"version"`
 	Identity            contracts.Identity                  `json:"identity"`
 	DSHConfigPath       string                              `json:"dsh_config_path,omitempty"`
+	DSHHomePath         string                              `json:"dsh_home_path,omitempty"`
 	DSHProfilePatchPath string                              `json:"dsh_profile_patch_path,omitempty"`
 	DSHComponents       map[string]bool                     `json:"dsh_components,omitempty"`
 	CodexHooksPath      string                              `json:"codex_hooks_path,omitempty"`
+	CodexHomePath       string                              `json:"codex_home_path,omitempty"`
 	CodexAdapterPath    string                              `json:"codex_adapter_path,omitempty"`
 	CodexHooksInstalled bool                                `json:"codex_hooks_installed"`
 	TencentInstallPath  string                              `json:"tencent_install_path,omitempty"`
 	ProjectBindings     map[string]contracts.ProjectBinding `json:"project_bindings,omitempty"`
+	ProjectRoots        map[string]string                   `json:"project_roots,omitempty"`
 	Receipts            []string                            `json:"receipts,omitempty"`
 	UpdatedAt           time.Time                           `json:"updated_at"`
 }
@@ -37,7 +40,7 @@ func DefaultGlobalStatePath() (string, error) {
 func LoadGlobalState(path string) (GlobalState, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return GlobalState{Version: 1, DSHComponents: map[string]bool{}, ProjectBindings: map[string]contracts.ProjectBinding{}}, nil
+		return GlobalState{Version: 1, DSHComponents: map[string]bool{}, ProjectBindings: map[string]contracts.ProjectBinding{}, ProjectRoots: map[string]string{}}, nil
 	}
 	if err != nil {
 		return GlobalState{}, err
@@ -55,6 +58,9 @@ func LoadGlobalState(path string) (GlobalState, error) {
 	if state.ProjectBindings == nil {
 		state.ProjectBindings = map[string]contracts.ProjectBinding{}
 	}
+	if state.ProjectRoots == nil {
+		state.ProjectRoots = map[string]string{}
+	}
 	return state, nil
 }
 
@@ -70,6 +76,9 @@ func SaveGlobalState(path string, state GlobalState) error {
 	}
 	if state.ProjectBindings == nil {
 		state.ProjectBindings = map[string]contracts.ProjectBinding{}
+	}
+	if state.ProjectRoots == nil {
+		state.ProjectRoots = map[string]string{}
 	}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
