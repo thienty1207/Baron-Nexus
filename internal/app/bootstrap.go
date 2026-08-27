@@ -101,7 +101,7 @@ func (a *App) preflightBootstrap(ctx context.Context) error {
 			return errors.New("host dependency preflight did not report a ready Node/pnpm/uv toolchain")
 		}
 	}
-	report, err := install.EnsureDocker(ctx, a.commandRunner(), install.DockerBootstrapOptions{})
+	report, err := install.EnsureDocker(ctx, a.commandRunner(), install.DockerBootstrapOptions{Refresh: true})
 	if err != nil {
 		return err
 	}

@@ -62,15 +62,22 @@ type hostDownloadFixture struct {
 
 func (f hostDownloadFixture) Download(_ context.Context, rawURL, destination string) error {
 	var data []byte
-	if strings.HasSuffix(rawURL, ".sha256") {
+	switch {
+	case rawURL == nodeReleaseIndexURL:
+		data = []byte(`[{"version":"v26.8.1","date":"2026-08-26","lts":false}]`)
+	case rawURL == uvReleaseAPIURL:
+		data = []byte(`{"tag_name":"0.12.6"}`)
+	case strings.HasSuffix(rawURL, ".sha256"):
 		data = []byte(f.checksum + "  uv.tar.gz\n")
-	} else {
+	case strings.Contains(rawURL, uvReleaseDownloadURL+"/"):
 		data = f.archive
+	default:
+		data = []byte("nodesource-key")
 	}
 	if err := os.WriteFile(destination, data, 0o600); err != nil {
 		return err
 	}
-	if f.markAvailable != nil && !strings.HasSuffix(rawURL, ".sha256") {
+	if f.markAvailable != nil && strings.Contains(rawURL, uvReleaseDownloadURL+"/") {
 		f.markAvailable()
 	}
 	return nil
@@ -137,7 +144,15 @@ func TestEnsureHostToolchainUsesSudoPreflightBeforePackageWork(t *testing.T) {
 	fixture := &sudoReauthFixture{}
 	fixture.available = map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true, "uv": true, "uvx": true}
 	fixture.outputs = map[string]string{"node --version": "v24.19.0\n"}
-	_, err := EnsureHostToolchain(context.Background(), fixture, HostToolchainOptions{GOOS: "linux", GOARCH: "amd64", OSReleasePath: osRelease})
+	archive := uvTestArchive(t)
+	digest := sha256.Sum256(archive)
+	_, err := EnsureHostToolchain(context.Background(), fixture, HostToolchainOptions{
+		GOOS:          "linux",
+		GOARCH:        "amd64",
+		OSReleasePath: osRelease,
+		Home:          t.TempDir(),
+		Downloader:    hostDownloadFixture{archive: archive, checksum: hex.EncodeToString(digest[:])},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +184,11 @@ func TestEnsureHostToolchainBootstrapsMissingNodeAndPnpm(t *testing.T) {
 		GOARCH:        "amd64",
 		OSReleasePath: osRelease,
 		Home:          t.TempDir(),
-		Downloader:    hostDownloadFixture{archive: []byte("nodesource-key")},
+		Downloader: func() FileDownloader {
+			archive := uvTestArchive(t)
+			digest := sha256.Sum256(archive)
+			return hostDownloadFixture{archive: archive, checksum: hex.EncodeToString(digest[:])}
+		}(),
 	})
 	if err != nil {
 		t.Fatal(err)

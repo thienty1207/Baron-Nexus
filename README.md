@@ -1,6 +1,6 @@
 # Baron Nexus
 
-Current release: `0.1.3` — concise DeepSeek key rotation and automated
+Current release: `0.1.4` — latest-at-run dependency refresh, concise DeepSeek key rotation, and automated
 Ubuntu/Debian first-install bootstrap.
 
 Baron Nexus is a native Go project continuity sidecar for DeepSeek Harness and Codex.
@@ -30,14 +30,18 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.3`. `sudo -v` must succeed before the first
-download. The installer verifies the release manifest and SHA-256 list before
-writing the binary, verifies the uv release checksum, refuses to replace an
-existing binary unless replacement is explicitly enabled, and never reads or
-stores the sudo password. If the sudo ticket expires during a long bootstrap,
-the installer asks sudo to authenticate again and retries the operation once.
-Docker is managed through sudo; Baron does not add the user to the `docker`
-group automatically.
+The expected output is `baron 0.1.4`. `sudo -v` must succeed before the first
+download. The installer resolves the latest Baron release tag, verifies the
+release manifest and SHA-256 list before writing the binary, resolves the
+latest Node/uv releases at run time, and refreshes Docker Engine/Compose,
+Node/npm/npx, pnpm, and uv/uvx from their official sources. A uv archive and
+checksum are always taken from the same resolved release tag and the complete
+pair is retried once after a digest mismatch. The installer refuses to replace
+an existing binary unless replacement is explicitly enabled, and never reads
+or stores the sudo password. If the sudo ticket expires during a long
+bootstrap, the installer asks sudo to authenticate again and retries the
+operation once. Docker is managed through sudo; Baron does not add the user to
+the `docker` group automatically.
 
 ### 1b. First time on Windows: `install.ps1`
 
@@ -55,9 +59,10 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.3`. The PowerShell installer downloads the
-Windows amd64 release, verifies the release manifest and SHA-256 list, and
-installs it at `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
+The expected output is `baron 0.1.4`. The PowerShell installer resolves the
+latest Baron release tag, downloads the Windows amd64 release, verifies the
+release manifest and SHA-256 list, and installs it at
+`$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
 If the current PowerShell session still cannot find `baron`, open a new
 PowerShell window or run:
 
@@ -93,12 +98,13 @@ service prerequisites installed and started first. Baron does not silently
 install or control those Windows UI components, and Windows does not use the
 Linux `sudo -v` preflight.
 
-The sequence is idempotent, so rerunning it repairs missing Baron-owned pieces
-without replacing project identity or user-owned agent configuration. On
-Ubuntu/Debian, Baron performs `sudo -v` before host/release/Tencent network
-work, uses sudo only for system operations, and never receives, echoes, or
-stores the password. If authorization expires, Baron requests sudo again once
-and stops with a repair instruction if reauthentication fails.
+The sequence is idempotent, so rerunning it refreshes the latest dependency
+channels and repairs missing Baron-owned pieces without replacing project
+identity or user-owned agent configuration. On Ubuntu/Debian, Baron performs
+`sudo -v` before host/release/Tencent network work, uses sudo only for system
+operations, and never receives, echoes, or stores the password. If
+authorization expires, Baron requests sudo again once and stops with a repair
+instruction if reauthentication fails.
 
 ### 3. Later version refresh: `baron update`
 
@@ -110,7 +116,10 @@ not run Docker, DSH, Codex, Tencent, or project setup, and the default
 baron update
 ```
 
-`baron update` is idempotent when the installed version is already current.
+`baron update` is idempotent when the installed Baron version is already
+current. It updates only the verified Baron binary; to refresh external DSH,
+Codex, plugin, Node, pnpm, uv, Docker, or Tencent dependencies, rerun
+`baron install` or the relevant initializer.
 Both `baron install` and `baron update` validate the release manifest, SHA-256,
 and candidate `baron --version` output before atomic replacement; a failed
 validation keeps the prior binary recoverable. They never overwrite project
@@ -163,10 +172,12 @@ updating the protected stores. The older `baron credentials set deepseek`
 form remains available as a compatibility alias.
 
 `baron tencent-memory init` performs the Linux sudo preflight, installs/starts
-Docker on supported Ubuntu/Debian hosts, validates the provider key, fetches
-the pinned Tencent deployment,
-and starts MemoryCore, MemoryHub/Panel, Proxy, and the combined Knowledge
-Service. It does not open the Panel for manual setup. Proxy values default to
+Docker on supported Ubuntu/Debian hosts, validates the provider key, resolves
+the latest Tencent deployment HEAD to an immutable commit, and fetches that
+revision when deployment work is required, then starts MemoryCore,
+MemoryHub/Panel, Proxy, and the combined Knowledge Service. A healthy managed
+stack is left in place on an idempotent rerun. It does not open the Panel for
+manual setup. Proxy values default to
 the same provider; custom providers can use the `BARON_TENCENT_*` environment
 overrides. If the managed deployment has no admin key, Baron asks for it
 through a hidden prompt and keeps it in the managed protected store for future

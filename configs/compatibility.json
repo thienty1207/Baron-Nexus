@@ -1,19 +1,18 @@
 {
   "schema_version": 1,
-  "tested_on": "2026-08-24",
+  "tested_on": "2026-08-27",
   "dsh": {
-    "release": "0.1.1-rc.2",
-    "commit": "b150a551b8d465e31e418e1b2eaf5e79bbb7d28e",
+    "release_policy": "latest-at-run",
     "adapter_api": "lifecycle-events-v1"
   },
   "codex": {
-    "release": "0.149.0",
+    "release_policy": "latest-at-run",
     "hook_api": "SessionStart,UserPromptSubmit,PreToolUse,PostToolUse,PreCompact,PostCompact,Stop,SessionEnd"
   },
   "tencent_memory": {
     "api": "v3",
     "repository": "https://github.com/TencentCloud/TencentDB-Agent-Memory.git",
-    "ref": "97f94654280b2932c35ba4806a491999ed244cc9",
+    "ref_policy": "latest-default-head-resolved-to-immutable-commit",
     "data_plane": "conversation,atomic,scenario,core",
     "required_isolation": "team_id,agent_id,user_id"
   },
@@ -22,9 +21,9 @@
     "registration": "ddg-search"
   },
   "dsh_plugins": {
-    "superpowers-dsh": "0.1.1",
-    "@deepseek-ai/dsh-mcp-client": "0.0.1-rc.1",
-    "dsh-reverse-skill": "1bc4d63ee9a5268419170f4c5fb4a4e59e0e815c",
+    "superpowers-dsh": "latest",
+    "@deepseek-ai/dsh-mcp-client": "latest",
+    "dsh-reverse-skill": "latest-default-head",
     "baron-dsh-adapter": "0.1.0"
   }
 }

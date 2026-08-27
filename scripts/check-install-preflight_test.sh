@@ -16,8 +16,13 @@ if rg -n 'SUDO_PASSWORD|sudo_password|printf.*PASSWORD|echo.*PASSWORD' install.s
 fi
 for phrase in \
   'nodejs' \
+  'node_${NODE_LATEST_MAJOR}.x' \
+  'nodejs.org/dist/index.json' \
   'pnpm@latest' \
+  'npm@latest' \
   'uv-${UV_ARCH}-unknown-linux-gnu.tar.gz' \
+  'api.github.com/repos/astral-sh/uv/releases/latest' \
+  'releases/download/$UV_LATEST_TAG' \
   'sha256sum' \
   'docker-ce' \
   'docker-compose-plugin' \
@@ -27,6 +32,10 @@ for phrase in \
     exit 20
   fi
 done
+if rg -n 'releases/latest/download|deb.nodesource.com/node_22\.x' install.sh >/dev/null; then
+  printf '%s\n' 'install.sh must use a resolved release tag and latest Node major, not mutable/old selectors.' >&2
+  exit 20
+fi
 if ! rg -q --fixed-strings 'baron deepseek api_key' install.sh; then
   printf '%s\n' 'install.sh must explain the canonical DeepSeek API-key rotation command when Baron is already installed.' >&2
   exit 20

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -20,9 +21,12 @@ import (
 )
 
 const (
-	nodeSourceRepository = "https://deb.nodesource.com/node_22.x"
+	nodeReleaseIndexURL  = "https://nodejs.org/dist/index.json"
+	nodeSourceRepository = "https://deb.nodesource.com/node_"
 	nodeSourceKeyURL     = "https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key"
-	uvReleaseBaseURL     = "https://github.com/astral-sh/uv/releases/latest/download"
+	uvReleaseAPIURL      = "https://api.github.com/repos/astral-sh/uv/releases/latest"
+	uvReleaseDownloadURL = "https://github.com/astral-sh/uv/releases/download"
+	uvDownloadAttempts   = 2
 )
 
 // HostToolchainOptions controls the Ubuntu/Debian dependency bootstrap. The
@@ -47,7 +51,7 @@ type HostToolchainReport struct {
 	Message      string
 }
 
-// EnsureHostToolchain installs or verifies Node/npm/npx, pnpm, and uv/uvx on
+// EnsureHostToolchain resolves and refreshes Node/npm/npx, pnpm, and uv/uvx on
 // Ubuntu/Debian. Sudo is authenticated before the first package or release
 // download. Windows remains on the documented manual Docker/WSL boundary.
 func EnsureHostToolchain(ctx context.Context, runner CommandRunner, options HostToolchainOptions) (HostToolchainReport, error) {
@@ -145,17 +149,50 @@ func runSudo(ctx context.Context, runner CommandRunner, args ...string) (string,
 	return output, nil
 }
 
-func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options HostToolchainOptions, distro linuxDistribution) (bool, error) {
-	nodeReady := false
-	if _, err := runner.LookPath("node"); err == nil {
-		if output, versionErr := runner.Run(ctx, "node", "--version"); versionErr == nil && supportedHostNodeVersion(output) {
-			nodeReady = true
-		}
+type nodeReleaseMetadata struct {
+	Version string `json:"version"`
+}
+
+func resolveLatestNodeMajor(ctx context.Context, downloader FileDownloader) (string, error) {
+	if downloader == nil {
+		return "", errors.New("Node release downloader is not configured")
 	}
-	npmReady := commandAvailable(runner, "npm")
-	npxReady := commandAvailable(runner, "npx")
-	if nodeReady && npmReady && npxReady {
-		return false, nil
+	tempRoot, err := os.MkdirTemp("", "baron-node-release-")
+	if err != nil {
+		return "", fmt.Errorf("create Node release metadata workspace: %w", err)
+	}
+	defer os.RemoveAll(tempRoot)
+	metadataPath := filepath.Join(tempRoot, "index.json")
+	if err := downloader.Download(ctx, nodeReleaseIndexURL, metadataPath); err != nil {
+		return "", errors.New("resolve the latest Node release")
+	}
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return "", errors.New("read the latest Node release metadata")
+	}
+	var releases []nodeReleaseMetadata
+	if err := json.Unmarshal(data, &releases); err != nil {
+		return "", errors.New("decode the latest Node release metadata")
+	}
+	for _, release := range releases {
+		version := strings.TrimPrefix(strings.TrimSpace(release.Version), "v")
+		parts := strings.Split(version, ".")
+		if len(parts) != 3 || parts[0] == "" {
+			continue
+		}
+		major, err := strconv.Atoi(parts[0])
+		if err != nil || major < 24 {
+			continue
+		}
+		return strconv.Itoa(major), nil
+	}
+	return "", errors.New("latest Node release metadata contains no supported release")
+}
+
+func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options HostToolchainOptions, distro linuxDistribution) (bool, error) {
+	latestMajor, err := resolveLatestNodeMajor(ctx, options.Downloader)
+	if err != nil {
+		return false, err
 	}
 	if _, err := runSudo(ctx, runner, "apt-get", "update"); err != nil {
 		return false, errors.New("Node bootstrap could not refresh apt metadata; retry after sudo authorization")
@@ -177,7 +214,7 @@ func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options Host
 	if _, err := runSudo(ctx, runner, "gpg", "--batch", "--yes", "--dearmor", "--output", keyringPath, keyPath); err != nil {
 		return false, errors.New("verify the official NodeSource signing key")
 	}
-	sources := "Types: deb\nURIs: " + nodeSourceRepository + "\nSuites: nodistro\nComponents: main\nArchitectures: " + nodeRepositoryArchitecture(options.GOARCH) + "\nSigned-By: /etc/apt/keyrings/nodesource.gpg\n\n"
+	sources := "Types: deb\nURIs: " + nodeSourceRepository + latestMajor + ".x\nSuites: nodistro\nComponents: main\nArchitectures: " + nodeRepositoryArchitecture(options.GOARCH) + "\nSigned-By: /etc/apt/keyrings/nodesource.gpg\n\n"
 	if err := os.WriteFile(sourcePath, []byte(sources), 0o600); err != nil {
 		return false, fmt.Errorf("write NodeSource repository definition: %w", err)
 	}
@@ -194,10 +231,10 @@ func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options Host
 		return false, errors.New("Node bootstrap could not refresh the NodeSource apt repository")
 	}
 	if _, err := runSudo(ctx, runner, "apt-get", "install", "-y", "nodejs"); err != nil {
-		return false, fmt.Errorf("install Node 22 on %s: %w", distro.ID, err)
+		return false, fmt.Errorf("install the latest supported Node major on %s: %w", distro.ID, err)
 	}
 	if output, versionErr := runner.Run(ctx, "node", "--version"); versionErr != nil || !supportedHostNodeVersion(output) {
-		return false, errors.New("Node was installed but is below the supported 22.19+ or 24+ version")
+		return false, fmt.Errorf("Node was installed but is below the supported 22.19+ or 24+ version (latest major %s)", latestMajor)
 	}
 	if !commandAvailable(runner, "npm") || !commandAvailable(runner, "npx") {
 		if _, err := runSudo(ctx, runner, "apt-get", "install", "-y", "npm"); err != nil {
@@ -211,9 +248,6 @@ func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options Host
 }
 
 func ensurePnpm(ctx context.Context, runner CommandRunner) (bool, error) {
-	if commandAvailable(runner, "pnpm") {
-		return false, nil
-	}
 	if !commandAvailable(runner, "npm") {
 		return false, errors.New("pnpm bootstrap requires npm")
 	}
@@ -227,9 +261,6 @@ func ensurePnpm(ctx context.Context, runner CommandRunner) (bool, error) {
 }
 
 func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownloader, goarch, binDir string) (bool, error) {
-	if commandAvailable(runner, "uv") && commandAvailable(runner, "uvx") {
-		return false, nil
-	}
 	asset, ok := uvLinuxAsset(goarch)
 	if !ok {
 		return false, fmt.Errorf("uv bootstrap does not support Linux architecture %q", goarch)
@@ -239,25 +270,39 @@ func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownload
 		return false, fmt.Errorf("create user-owned uv bootstrap workspace: %w", err)
 	}
 	defer os.RemoveAll(tempRoot)
-	archivePath := filepath.Join(tempRoot, asset)
-	checksumPath := archivePath + ".sha256"
-	if err := downloader.Download(ctx, uvReleaseBaseURL+"/"+asset, archivePath); err != nil {
-		return false, errors.New("download the latest uv release after sudo preflight")
-	}
-	if err := downloader.Download(ctx, uvReleaseBaseURL+"/"+asset+".sha256", checksumPath); err != nil {
-		return false, errors.New("download the uv release checksum")
-	}
-	checksumData, err := os.ReadFile(checksumPath)
+	tag, err := resolveLatestUVTag(ctx, downloader, filepath.Join(tempRoot, "release.json"))
 	if err != nil {
-		return false, errors.New("read the uv release checksum")
+		return false, err
 	}
-	expected, err := firstChecksum(string(checksumData))
-	if err != nil {
-		return false, errors.New("uv release checksum is malformed")
-	}
-	actual, err := fileSHA256(archivePath)
-	if err != nil || actual != expected {
-		return false, errors.New("refusing to install uv: release checksum verification failed")
+	var archivePath string
+	for attempt := 1; attempt <= uvDownloadAttempts; attempt++ {
+		archivePath = filepath.Join(tempRoot, fmt.Sprintf("%s.%d", asset, attempt))
+		checksumPath := archivePath + ".sha256"
+		baseURL := uvReleaseDownloadURL + "/" + tag
+		if err := downloader.Download(ctx, baseURL+"/"+asset, archivePath); err != nil {
+			return false, errors.New("download the latest uv release after sudo preflight")
+		}
+		if err := downloader.Download(ctx, baseURL+"/"+asset+".sha256", checksumPath); err != nil {
+			return false, errors.New("download the uv release checksum")
+		}
+		checksumData, err := os.ReadFile(checksumPath)
+		if err != nil {
+			return false, errors.New("read the uv release checksum")
+		}
+		expected, err := firstChecksum(string(checksumData))
+		if err != nil {
+			return false, errors.New("uv release checksum is malformed")
+		}
+		actual, err := fileSHA256(archivePath)
+		if err == nil && actual == expected {
+			break
+		}
+		if attempt == uvDownloadAttempts {
+			if err != nil {
+				return false, fmt.Errorf("refusing to install uv: release checksum verification failed: calculate archive checksum: %w", err)
+			}
+			return false, fmt.Errorf("refusing to install uv: release checksum verification failed (expected %s, got %s)", expected, actual)
+		}
 	}
 	binaries, err := readUVArchive(archivePath)
 	if err != nil {
@@ -279,6 +324,51 @@ func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownload
 		return false, errors.New("uv/uvx were installed but are not on PATH; export PATH=\"$HOME/.local/bin:$PATH\" and retry")
 	}
 	return true, nil
+}
+
+type uvReleaseMetadata struct {
+	TagName string `json:"tag_name"`
+}
+
+func resolveLatestUVTag(ctx context.Context, downloader FileDownloader, destination string) (string, error) {
+	if downloader == nil {
+		return "", errors.New("uv release downloader is not configured")
+	}
+	if err := downloader.Download(ctx, uvReleaseAPIURL, destination); err != nil {
+		return "", errors.New("resolve the latest uv release")
+	}
+	data, err := os.ReadFile(destination)
+	if err != nil {
+		return "", errors.New("read the latest uv release metadata")
+	}
+	var metadata uvReleaseMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return "", errors.New("decode the latest uv release metadata")
+	}
+	tag := strings.TrimSpace(metadata.TagName)
+	if !isReleaseTag(tag) {
+		return "", fmt.Errorf("latest uv release returned invalid tag %q", tag)
+	}
+	return tag, nil
+}
+
+func isReleaseTag(value string) bool {
+	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, char := range part {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func commandAvailable(runner CommandRunner, name string) bool {

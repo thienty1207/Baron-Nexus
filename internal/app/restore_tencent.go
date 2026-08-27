@@ -39,7 +39,7 @@ func requiresTencentRestore(state config.GlobalState) bool {
 // restoreTencentState restores the external sidecar before local state is
 // committed. Backups deliberately omit Docker volumes and secrets, so this
 // path reuses the current managed deployment when healthy or runs the same
-// pinned Linux bootstrap used by tencent-memory init. It then verifies the
+// managed Linux bootstrap used by tencent-memory init. It then verifies the
 // Baron identity and each recorded project agent without creating replacements.
 func (a *App) restoreTencentState(ctx context.Context, state config.GlobalState) (config.GlobalState, error) {
 	globalPath, err := a.globalPath()

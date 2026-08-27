@@ -4,14 +4,14 @@
 
 - Historical source revision: `3d9e76961e2faaa63ee3b2cfaa5d8c3df9231036`
   (published `v0.1.1` release candidate with the public-download timeout fix).
-- Working tree: the `v0.1.3` release candidate plus the P28 implementation and
-  the concise DeepSeek key command;
+- Working tree: the `v0.1.4` release candidate plus the P28 credential flow and
+  P29 latest-at-run dependency refresh;
   user-local
   `.baron/` state remains untracked and intentionally excluded from the
   release.
-- Candidate version: `0.1.3`.
+- Candidate version: `0.1.4`.
 - The historical `v0.1.1` artifact hashes and directory remain in the dated
-  evidence below; the tagged `v0.1.3` workflow rebuilds artifacts from this
+  evidence below; the tagged `v0.1.4` workflow rebuilds artifacts from this
   candidate commit.
 - Toolchain: `go1.27.0 linux/amd64`
 - Historical `v0.1.1` release directory: `/tmp/baron-release-0.1.1.fixed.gOuFUD`
@@ -33,7 +33,7 @@
 - Local-first hook processing for Codex and DSH with canonical events,
   bounded/redacted logs, idempotency, fail-open client responses, and strict
   project/team/agent/user isolation on remote requests.
-- Pinned DSH installation/profile integration, embedded Baron DSH adapter,
+- Latest-at-run DSH installation/profile integration, embedded Baron DSH adapter,
   DuckDuckGo MCP profile patch, official nested Codex hook shape, Tencent v3
   client, identity provisioning, managed deployment bootstrap code, and
   provider-credential bootstrap through the official DSH/Tencent stores. The
@@ -54,7 +54,7 @@
   runtime smoke.
 - Linux amd64 and Windows amd64 CGO-free release artifacts, checksum manifest,
   module SBOM, shell/PowerShell installers, and update rollback logic.
-- Stable `baron 0.1.3` version output, verified GitHub release metadata and
+- Stable `baron 0.1.4` version output, verified GitHub release metadata and
   SHA-256 download protocol, atomic Linux `baron install`/`baron update`,
   idempotent update behavior, and staged Windows restart guidance.
 - One-command `baron install` bootstrap coordinator: native host preflight,
@@ -94,6 +94,10 @@
   full Go/vet/race-container, shell, installer-preflight, and guidance checks
   PASS; clean-machine and published-provider replacement/outage acceptance
   remain pending.
+- P29 latest-at-run dependency refresh and `0.1.4` release: local resolver,
+  host/Docker refresh, version, documentation, and focused fixture work pass;
+  artifact/public-release verification and clean Ubuntu/Debian, Windows, and
+  full live dependency acceptance remain pending until recorded.
 
 ## Verification evidence
 
@@ -300,6 +304,11 @@ These are environment limitations, not converted mock passes:
   user's interactive sudo authorization for a clean first-install machine.
   P28-TEST06 remains open because no published-release wrong-key/replacement
   matrix was claimed from local fixtures.
+- P29-TEST03 remains open because no clean Ubuntu/Debian machine was available
+  for a fresh published-installer run. P29-TEST04 remains open because no
+  Windows runtime is available. P29-TEST05 remains open because full live
+  latest-dependency/provider/CodeGraph/Wiki/Skill acceptance is not inferred
+  from local fixtures.
 
 ## Final status
 

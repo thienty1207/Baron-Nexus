@@ -45,6 +45,24 @@ func validateTencentRef(value string) error {
 	return nil
 }
 
+func resolveLatestTencentRef(ctx context.Context, runner CommandRunner, repository string) (string, error) {
+	if runner == nil {
+		return "", errors.New("Tencent source resolver is not configured")
+	}
+	if strings.TrimSpace(repository) == "" {
+		repository = TencentMemoryRepository
+	}
+	output, err := runner.Run(ctx, "git", "ls-remote", repository, "HEAD")
+	if err != nil {
+		return "", errors.New("resolve the latest Tencent Agent Memory commit")
+	}
+	fields := strings.Fields(output)
+	if len(fields) == 0 || !isImmutableTencentRef(fields[0]) {
+		return "", errors.New("latest Tencent Agent Memory HEAD did not resolve to an immutable commit SHA")
+	}
+	return fields[0], nil
+}
+
 func resolveTencentDeploymentManifest(ctx context.Context, runner CommandRunner, options TencentDeploymentOptions) (TencentDeploymentManifest, error) {
 	commitOutput, err := runner.Run(ctx, "git", "-C", options.Root, "rev-parse", "HEAD")
 	if err != nil {
@@ -145,7 +163,7 @@ func ReadTencentDeploymentManifest(root string) (TencentDeploymentManifest, erro
 	return readTencentDeploymentManifest(root)
 }
 
-// UpdateTencentDeployment performs a pinned deployment update and restores the
+// UpdateTencentDeployment performs a latest-at-run deployment update and restores the
 // previous checked-out commit plus service startup if verification/startup
 // fails. Docker volumes and the managed .env are intentionally left in place.
 func UpdateTencentDeployment(ctx context.Context, runner CommandRunner, options TencentDeploymentOptions) (TencentDeploymentManifest, error) {
@@ -154,12 +172,6 @@ func UpdateTencentDeployment(ctx context.Context, runner CommandRunner, options 
 	}
 	if options.Repository == "" {
 		options.Repository = TencentMemoryRepository
-	}
-	if options.Ref == "" {
-		options.Ref = TencentMemoryRef
-	}
-	if err := validateTencentRef(options.Ref); err != nil {
-		return TencentDeploymentManifest{}, err
 	}
 	previous, err := readTencentDeploymentManifest(options.Root)
 	if err != nil {

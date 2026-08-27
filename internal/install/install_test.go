@@ -202,37 +202,65 @@ func TestCodexHookInspectionSeparatesConfigurationFromInteractiveTrust(t *testin
 	}
 }
 
-func TestInstallCodexUsesPinnedOfficialPackageAndVersion(t *testing.T) {
+func TestInstallCodexUsesLatestOfficialPackageAndReportedVersion(t *testing.T) {
 	fixture := &codexInstallFixture{commandFixture: &commandFixture{
 		available: map[string]bool{"npm": true},
-		outputs:   map[string]string{"codex --version": "codex 0.149.0"},
+		outputs:   map[string]string{"codex --version": "codex 0.150.0"},
 	}}
-	source, err := InstallCodexWithSource(context.Background(), fixture, "0.149.0")
+	source, err := InstallCodexWithSource(context.Background(), fixture, "latest")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if source != "npm:@openai/codex" {
 		t.Fatalf("unexpected Codex install source: %s", source)
 	}
-	if len(fixture.calls) != 2 || fixture.calls[0] != "npm install --global @openai/codex@0.149.0" || fixture.calls[1] != "codex --version" {
-		t.Fatalf("Codex installer did not use the pinned official path: %#v", fixture.calls)
+	if len(fixture.calls) != 2 || fixture.calls[0] != "npm install --global @openai/codex@latest" || fixture.calls[1] != "codex --version" {
+		t.Fatalf("Codex installer did not use the latest official path: %#v", fixture.calls)
 	}
 }
 
-func TestInstallCodexReusesExistingPinnedBinaryWithoutNPM(t *testing.T) {
-	fixture := &commandFixture{
-		available: map[string]bool{"codex": true},
-		outputs:   map[string]string{"codex --version": "codex-cli 0.149.0"},
-	}
-	source, err := InstallCodexWithSource(context.Background(), fixture, "0.149.0")
+func TestInstallCodexWithVersionReportsLatestCommandVersion(t *testing.T) {
+	fixture := &codexInstallFixture{commandFixture: &commandFixture{
+		available: map[string]bool{"npm": true},
+		outputs:   map[string]string{"codex --version": "codex-cli 0.150.0"},
+	}}
+	_, version, err := InstallCodexWithVersion(context.Background(), fixture, "latest")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if source != "existing:codex" {
-		t.Fatalf("unexpected reused Codex source: %s", source)
+	if version != "0.150.0" {
+		t.Fatalf("reported Codex version=%q, want 0.150.0", version)
 	}
-	if len(fixture.calls) != 1 || fixture.calls[0] != "codex --version" {
-		t.Fatalf("existing pinned Codex was not reused: %#v", fixture.calls)
+}
+
+func TestInstallCodexRefreshesExistingBinaryToLatest(t *testing.T) {
+	fixture := &commandFixture{
+		available: map[string]bool{"codex": true, "npm": true},
+		outputs:   map[string]string{"codex --version": "codex-cli 0.149.0"},
+	}
+	source, err := InstallCodexWithSource(context.Background(), fixture, "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source != "npm:@openai/codex" {
+		t.Fatalf("unexpected refreshed Codex source: %s", source)
+	}
+	if len(fixture.calls) != 2 || fixture.calls[0] != "npm install --global @openai/codex@latest" || fixture.calls[1] != "codex --version" {
+		t.Fatalf("existing Codex was not refreshed to latest: %#v", fixture.calls)
+	}
+}
+
+func TestInstallCodexFallsBackToSudoForRootOwnedGlobalNpmPrefix(t *testing.T) {
+	fixture := &npmGlobalPermissionFixture{
+		commandFixture: &commandFixture{available: map[string]bool{"npm": true, "sudo": true}, outputs: map[string]string{}},
+		installName:    "codex",
+	}
+	_, version, err := InstallCodexWithVersion(context.Background(), fixture, "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "0.150.0" || len(fixture.calls) != 3 || fixture.calls[1] != "sudo -n npm install --global @openai/codex@latest" {
+		t.Fatalf("unexpected sudo npm fallback=%q calls=%#v", version, fixture.calls)
 	}
 }
 

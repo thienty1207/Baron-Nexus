@@ -875,10 +875,11 @@ func (a *App) DSHInit() error {
 	if err != nil {
 		return err
 	}
-	if err := install.InstallDSH(context.Background(), a.commandRunner(), install.PinnedDSHVersion); err != nil {
+	dshVersion, err := install.InstallDSHWithVersion(context.Background(), a.commandRunner(), install.LatestDependencySelector)
+	if err != nil {
 		return err
 	}
-	if err := install.InstallDSHPlugins(context.Background(), a.commandRunner(), install.PinnedDSHVersion); err != nil {
+	if err := install.InstallDSHPlugins(context.Background(), a.commandRunner(), dshVersion); err != nil {
 		return err
 	}
 	globalDir := filepath.Dir(path)
@@ -910,7 +911,7 @@ func (a *App) DSHInit() error {
 	}
 	global.DSHConfigPath = filepath.Join(globalDir, "dsh.json")
 	global.DSHProfilePatchPath = profilePatchPath
-	report, err := installDSH(global.DSHConfigPath)
+	report, err := installDSH(global.DSHConfigPath, dshVersion)
 	if err != nil {
 		return err
 	}
@@ -926,7 +927,7 @@ func (a *App) DSHInit() error {
 		}
 	}
 	receiptPath := filepath.Join(globalDir, "receipts", "dsh.json")
-	if err := install.WriteReceipt(receiptPath, install.Receipt{Component: "deepseek-harness", Version: install.PinnedDSHVersion, Source: "npm:@deepseek-ai/dsh"}); err != nil {
+	if err := install.WriteReceipt(receiptPath, install.Receipt{Component: "deepseek-harness", Version: dshVersion, Source: "npm:@deepseek-ai/dsh"}); err != nil {
 		return err
 	}
 	global.Receipts = appendReceipt(global.Receipts, receiptPath)
@@ -934,7 +935,7 @@ func (a *App) DSHInit() error {
 }
 
 func (a *App) CodexInit() error {
-	codexSource, err := install.InstallCodexWithSource(context.Background(), a.commandRunner(), "0.149.0")
+	codexSource, codexVersion, err := install.InstallCodexWithVersion(context.Background(), a.commandRunner(), install.LatestDependencySelector)
 	if err != nil {
 		return err
 	}
@@ -957,12 +958,12 @@ func (a *App) CodexInit() error {
 	}
 	global.CodexHooksInstalled = true
 	receiptPath := filepath.Join(globalDir, "receipts", "codex.json")
-	if err := install.WriteReceipt(receiptPath, install.Receipt{Component: "codex-cli", Version: "0.149.0", Source: codexSource}); err != nil {
+	if err := install.WriteReceipt(receiptPath, install.Receipt{Component: "codex-cli", Version: codexVersion, Source: codexSource}); err != nil {
 		return err
 	}
 	global.Receipts = appendReceipt(global.Receipts, receiptPath)
 	adapterReceiptPath := filepath.Join(globalDir, "receipts", "codex-adapter.json")
-	if err := install.WriteReceipt(adapterReceiptPath, install.Receipt{Component: "codex-adapter", Version: install.PinnedCodexAdapterVersion, Source: "embedded:adapters/codex"}); err != nil {
+	if err := install.WriteReceipt(adapterReceiptPath, install.Receipt{Component: "codex-adapter", Version: install.EmbeddedCodexAdapterVersion, Source: "embedded:adapters/codex"}); err != nil {
 		return err
 	}
 	global.Receipts = appendReceipt(global.Receipts, adapterReceiptPath)
@@ -1388,8 +1389,8 @@ func processEnvironment() map[string]string {
 
 // The imports are kept behind these tiny adapters so app wiring remains easy
 // to replace with fixture runners in tests.
-func installDSH(path string) (installReport, error) {
-	report, err := install.EnsureDSHBaseline(path, install.DSHOptions{AdapterCommand: "baron hook dsh"})
+func installDSH(path, dshVersion string) (installReport, error) {
+	report, err := install.EnsureDSHBaseline(path, install.DSHOptions{AdapterCommand: "baron hook dsh", Version: dshVersion})
 	return installReport{Components: report.Components}, err
 }
 

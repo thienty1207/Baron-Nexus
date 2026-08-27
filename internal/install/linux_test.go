@@ -118,6 +118,37 @@ func TestEnsureDockerUsesOfficialAptPathWithoutDockerGroupMutation(t *testing.T)
 	}
 }
 
+func TestEnsureDockerRefreshesHealthyDaemonWhenRequested(t *testing.T) {
+	fixture := &dockerBootstrapFixture{
+		available: map[string]bool{"sudo": true, "docker": true, "systemctl": true},
+		outputs: map[string]string{
+			"docker info":         "ready",
+			"sudo -n true":        "",
+			"sudo -n docker info": "ready",
+		},
+	}
+	report, err := EnsureDocker(context.Background(), fixture, DockerBootstrapOptions{
+		GOOS:          "linux",
+		GOARCH:        "amd64",
+		OSReleasePath: writeOSRelease(t, "ID=ubuntu\nVERSION_ID=26.04\nUBUNTU_CODENAME=resolute\n"),
+		Downloader:    fixture,
+		Refresh:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Ready || !report.Installed || !report.UsedSudo {
+		t.Fatalf("healthy daemon was not refreshed: %#v", report)
+	}
+	if len(fixture.downloads) != 1 || fixture.downloads[0] != "https://download.docker.com/linux/ubuntu/gpg" {
+		t.Fatalf("latest Docker repository was not resolved: %#v", fixture.downloads)
+	}
+	joined := strings.Join(fixture.calls, "\n")
+	if !strings.Contains(joined, "sudo -n apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin") {
+		t.Fatalf("healthy Docker refresh did not install latest official package set: %#v", fixture.calls)
+	}
+}
+
 func TestEnsureDockerRepairsStoppedDaemonWithSudo(t *testing.T) {
 	fixture := &dockerBootstrapFixture{
 		available: map[string]bool{"sudo": true, "docker": true, "systemctl": true},

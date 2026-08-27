@@ -34,13 +34,19 @@ try {
       throw "Invalid Repository; expected owner/repository."
     }
     if ($Version -eq "latest") {
-      $baseUrl = "https://github.com/$Repository/releases/latest/download"
+      $releaseApi = "https://api.github.com/repos/$Repository/releases/latest"
+      $release = Invoke-RestMethod -Headers @{ Accept = "application/vnd.github+json"; "User-Agent" = "Baron-Nexus/$Version" } -Uri $releaseApi
+      $latestTag = [string]$release.tag_name
+      if ($latestTag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') {
+        throw "GitHub latest Baron release has no valid v-prefixed semantic tag."
+      }
+      $baseUrl = "https://github.com/$Repository/releases/download/$latestTag"
     } elseif ($Version -match '^v[0-9]+\.[0-9]+\.[0-9]+$') {
       $baseUrl = "https://github.com/$Repository/releases/download/$Version"
     } elseif ($Version -match '^[0-9]+\.[0-9]+\.[0-9]+$') {
       $baseUrl = "https://github.com/$Repository/releases/download/v$Version"
     } else {
-      throw "Version must be latest or a semantic version such as 0.1.3."
+      throw "Version must be latest or a semantic version such as 0.1.4."
     }
     $manifestPath = Join-Path $tempRoot "release-manifest.json"
     $sumsPath = Join-Path $tempRoot "SHA256SUMS"

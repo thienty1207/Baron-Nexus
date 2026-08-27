@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -14,40 +15,46 @@ type CommandRunner interface {
 }
 
 const (
-	PinnedDSHVersion          = "0.1.1-rc.2"
-	PinnedSuperpowersVersion  = "0.1.1"
-	PinnedMCPClientVersion    = "0.0.1-rc.1"
-	PinnedReverseSkillCommit  = "1bc4d63ee9a5268419170f4c5fb4a4e59e0e815c"
-	PinnedReverseSkillPackage = "https://github.com/dhicoc/dsh-reverse-skill.git#" + PinnedReverseSkillCommit
-	PinnedCodexAdapterVersion = "0.1.0"
+	LatestDependencySelector    = "latest"
+	EmbeddedCodexAdapterVersion = "0.1.0"
 )
 
 func InstallDSH(ctx context.Context, runner CommandRunner, version string) error {
+	_, err := InstallDSHWithVersion(ctx, runner, version)
+	return err
+}
+
+func InstallDSHWithVersion(ctx context.Context, runner CommandRunner, version string) (string, error) {
 	if runner == nil {
-		return errors.New("Node/npm runner is not configured")
+		return "", errors.New("Node/npm runner is not configured")
 	}
 	if _, err := runner.LookPath("npm"); err != nil {
-		return errors.New("Node/npm is required for DeepSeek Harness initialization")
+		return "", errors.New("Node/npm is required for DeepSeek Harness initialization")
 	}
 	if version == "" {
-		version = PinnedDSHVersion
+		version = LatestDependencySelector
 	}
-	if _, err := runner.Run(ctx, "npm", "install", "--global", "@deepseek-ai/dsh@"+version); err != nil {
-		return fmt.Errorf("install @deepseek-ai/dsh@%s: %w", version, err)
+	if err := installGlobalNPM(ctx, runner, "@deepseek-ai/dsh@"+version); err != nil {
+		return "", fmt.Errorf("install @deepseek-ai/dsh@%s: %w", version, err)
 	}
 	if _, err := runner.LookPath("dsh"); err != nil {
-		return errors.New("DeepSeek Harness package installed but dsh is not on PATH")
+		return "", errors.New("DeepSeek Harness package installed but dsh is not on PATH")
 	}
-	if _, err := runner.Run(ctx, "dsh", "--version"); err != nil {
-		return fmt.Errorf("verify dsh installation: %w", err)
+	output, err := runner.Run(ctx, "dsh", "--version")
+	if err != nil {
+		return "", fmt.Errorf("verify dsh installation: %w", err)
 	}
-	return nil
+	reported := reportedVersion(output)
+	if reported == "" {
+		return "", errors.New("verify dsh installation: dsh did not report a semantic version")
+	}
+	return reported, nil
 }
 
 // InstallDSHPlugins uses the upstream DSH plugin mechanism. Direct npm
 // installation would leave packages as ordinary dependencies and would not
 // activate their profile bundles.
-func InstallDSHPlugins(ctx context.Context, runner CommandRunner, dshVersion string) error {
+func InstallDSHPlugins(ctx context.Context, runner CommandRunner, _ string) error {
 	if runner == nil {
 		return errors.New("Node/pnpm runner is not configured")
 	}
@@ -57,13 +64,10 @@ func InstallDSHPlugins(ctx context.Context, runner CommandRunner, dshVersion str
 	if _, err := runner.LookPath("uvx"); err != nil {
 		return errors.New("uv/uvx is required for the mandatory DuckDuckGo MCP")
 	}
-	if dshVersion == "" {
-		dshVersion = PinnedDSHVersion
-	}
 	plugins := []string{
-		"superpowers-dsh@" + PinnedSuperpowersVersion,
-		PinnedReverseSkillPackage,
-		"@deepseek-ai/dsh-mcp-client@" + PinnedMCPClientVersion,
+		"superpowers-dsh@" + LatestDependencySelector,
+		"https://github.com/dhicoc/dsh-reverse-skill.git",
+		"@deepseek-ai/dsh-mcp-client@" + LatestDependencySelector,
 	}
 	for _, profile := range []string{"web", "headless"} {
 		for _, plugin := range plugins {
@@ -131,41 +135,83 @@ func InstallCodex(ctx context.Context, runner CommandRunner, version string) err
 	return err
 }
 
-// InstallCodexWithSource verifies or installs the pinned Codex CLI and
+// InstallCodexWithSource verifies or installs the selected Codex CLI release and
 // reports whether Baron reused an existing binary or used the official npm
 // package path. The source is safe for receipts and never contains a command
 // output or credential.
 func InstallCodexWithSource(ctx context.Context, runner CommandRunner, version string) (string, error) {
+	source, _, err := InstallCodexWithVersion(ctx, runner, version)
+	return source, err
+}
+
+func InstallCodexWithVersion(ctx context.Context, runner CommandRunner, version string) (string, string, error) {
 	if runner == nil {
-		return "", errors.New("Node/npm runner is not configured")
+		return "", "", errors.New("Node/npm runner is not configured")
 	}
 	if version == "" {
-		version = "0.149.0"
+		version = LatestDependencySelector
 	}
-	if _, codexErr := runner.LookPath("codex"); codexErr == nil {
-		if output, verifyErr := runner.Run(ctx, "codex", "--version"); verifyErr == nil && versionInOutput(output, version) {
-			return "existing:codex", nil
-		}
-		if _, npmErr := runner.LookPath("npm"); npmErr != nil {
-			return "", fmt.Errorf("Codex CLI is present but not pinned to %s; npm is unavailable to install the pinned version", version)
+	latest := version == LatestDependencySelector
+	if !latest {
+		if _, codexErr := runner.LookPath("codex"); codexErr == nil {
+			if output, verifyErr := runner.Run(ctx, "codex", "--version"); verifyErr == nil && versionInOutput(output, version) {
+				return "existing:codex", version, nil
+			}
+			if _, npmErr := runner.LookPath("npm"); npmErr != nil {
+				return "", "", fmt.Errorf("Codex CLI is present but not %s; npm is unavailable to install the requested version", version)
+			}
+		} else if _, npmErr := runner.LookPath("npm"); npmErr != nil {
+			return "", "", fmt.Errorf("Node/npm is required when Codex CLI is not already installed at %s", version)
 		}
 	} else if _, npmErr := runner.LookPath("npm"); npmErr != nil {
-		return "", errors.New("Node/npm is required when the pinned Codex CLI is not already installed")
+		return "", "", errors.New("Node/npm is required to refresh Codex CLI to latest")
 	}
-	if _, err := runner.Run(ctx, "npm", "install", "--global", "@openai/codex@"+version); err != nil {
-		return "", fmt.Errorf("install @openai/codex@%s: %w", version, err)
+	if err := installGlobalNPM(ctx, runner, "@openai/codex@"+version); err != nil {
+		return "", "", fmt.Errorf("install @openai/codex@%s: %w", version, err)
 	}
 	if _, err := runner.LookPath("codex"); err != nil {
-		return "", errors.New("Codex package installed but codex is not on PATH")
+		return "", "", errors.New("Codex package installed but codex is not on PATH")
 	}
 	output, err := runner.Run(ctx, "codex", "--version")
 	if err != nil {
-		return "", fmt.Errorf("verify Codex installation: %w", err)
+		return "", "", fmt.Errorf("verify Codex installation: %w", err)
 	}
-	if !versionInOutput(output, version) {
-		return "", fmt.Errorf("verify Codex installation: expected pinned version %s", version)
+	reported := reportedVersion(output)
+	if reported == "" {
+		return "", "", errors.New("verify Codex installation: codex did not report a semantic version")
 	}
-	return "npm:@openai/codex", nil
+	if !latest && !versionInOutput(output, version) {
+		return "", "", fmt.Errorf("verify Codex installation: expected version %s", version)
+	}
+	return "npm:@openai/codex", reported, nil
+}
+
+// installGlobalNPM first honors a user-managed Node installation. On a fresh
+// Ubuntu/Debian host, the automatic Node bootstrap may leave npm's global
+// prefix root-owned; in that case retry the same package operation through
+// native sudo so the user does not need a manual npm-prefix repair.
+func installGlobalNPM(ctx context.Context, runner CommandRunner, packageSpec string) error {
+	args := []string{"install", "--global", packageSpec}
+	if _, err := runner.Run(ctx, "npm", args...); err == nil {
+		return nil
+	} else {
+		if _, sudoErr := runner.LookPath("sudo"); sudoErr == nil {
+			if _, retryErr := runSudo(ctx, runner, append([]string{"npm"}, args...)...); retryErr == nil {
+				return nil
+			}
+		}
+		return err
+	}
+}
+
+var reportedVersionPattern = regexp.MustCompile(`(?:^|[^0-9])v?([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)`)
+
+func reportedVersion(output string) string {
+	match := reportedVersionPattern.FindStringSubmatch(output)
+	if len(match) != 2 {
+		return ""
+	}
+	return strings.TrimPrefix(match[1], "v")
 }
 
 func versionInOutput(output, version string) bool {

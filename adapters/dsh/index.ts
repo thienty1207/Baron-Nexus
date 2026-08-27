@@ -24,12 +24,12 @@ export interface BaronAdapterOptions {
 }
 
 export const BARON_DSH_ADAPTER_VERSION = "0.1.0";
-export const SUPPORTED_DSH_VERSIONS = ["0.1.1-rc.2"] as const;
+export const SUPPORTED_DSH_VERSIONS = ["latest"] as const;
 export const name = "baron-dsh-adapter";
 
 export function assertSupportedDshVersion(version: string): void {
-  if (!SUPPORTED_DSH_VERSIONS.includes(version as (typeof SUPPORTED_DSH_VERSIONS)[number])) {
-    throw new Error(`unsupported dsh version ${version}; supported versions: ${SUPPORTED_DSH_VERSIONS.join(", ")}`);
+  if (!/^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version.trim())) {
+    throw new Error(`unsupported dsh version ${version}; Baron supports the latest semantic DSH release at run time`);
   }
 }
 

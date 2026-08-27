@@ -28,6 +28,34 @@ func (f *codexInstallFixture) Run(ctx context.Context, name string, args ...stri
 	return output, err
 }
 
+type npmGlobalPermissionFixture struct {
+	*commandFixture
+	installName string
+}
+
+func (f *npmGlobalPermissionFixture) Run(ctx context.Context, name string, args ...string) (string, error) {
+	call := name + " " + strings.Join(args, " ")
+	f.calls = append(f.calls, call)
+	if name == "npm" && len(args) >= 3 && args[0] == "install" && args[1] == "--global" {
+		return "", errors.New("EACCES: permission denied, global npm prefix is root-owned")
+	}
+	if name == "sudo" && len(args) >= 4 && args[0] == "-n" && args[1] == "npm" && args[2] == "install" && args[3] == "--global" {
+		f.available[f.installName] = true
+		return "", nil
+	}
+	if name == "dsh" && len(args) == 1 && args[0] == "--version" {
+		return "dsh 0.1.5", nil
+	}
+	if name == "codex" && len(args) == 1 && args[0] == "--version" {
+		return "codex-cli 0.150.0", nil
+	}
+	return "ok", nil
+}
+
+func (f *npmGlobalPermissionFixture) LookPath(name string) (string, error) {
+	return f.commandFixture.LookPath(name)
+}
+
 type failingCommandFixture struct {
 	base       *commandFixture
 	failMatch  string
@@ -64,13 +92,24 @@ func (f *commandFixture) Run(_ context.Context, name string, args ...string) (st
 	return "ok", nil
 }
 
-func TestInstallDSHUsesPinnedOfficialPackage(t *testing.T) {
-	fixture := &commandFixture{available: map[string]bool{"npm": true, "dsh": true}}
-	if err := InstallDSH(context.Background(), fixture, "0.1.0"); err != nil {
+func TestInstallDSHDefaultsToLatestOfficialPackage(t *testing.T) {
+	fixture := &commandFixture{available: map[string]bool{"npm": true, "dsh": true}, outputs: map[string]string{"dsh --version": "dsh 0.2.0\n"}}
+	if err := InstallDSH(context.Background(), fixture, ""); err != nil {
 		t.Fatal(err)
 	}
-	if len(fixture.calls) != 2 || !strings.Contains(fixture.calls[0], "@deepseek-ai/dsh@0.1.0") || fixture.calls[1] != "dsh --version" {
+	if len(fixture.calls) != 2 || !strings.Contains(fixture.calls[0], "@deepseek-ai/dsh@latest") || fixture.calls[1] != "dsh --version" {
 		t.Fatalf("unexpected installer call: %#v", fixture.calls)
+	}
+}
+
+func TestInstallDSHWithVersionReportsLatestCommandVersion(t *testing.T) {
+	fixture := &commandFixture{available: map[string]bool{"npm": true, "dsh": true}, outputs: map[string]string{"dsh --version": "dsh 0.2.0\n"}}
+	version, err := InstallDSHWithVersion(context.Background(), fixture, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "0.2.0" {
+		t.Fatalf("reported DSH version=%q, want 0.2.0", version)
 	}
 }
 
@@ -78,6 +117,20 @@ func TestInstallDSHReportsMissingNodeToolchain(t *testing.T) {
 	fixture := &commandFixture{available: map[string]bool{}}
 	if err := InstallDSH(context.Background(), fixture, "0.1.0"); err == nil || !strings.Contains(err.Error(), "Node/npm") {
 		t.Fatalf("missing toolchain was not actionable: %v", err)
+	}
+}
+
+func TestInstallDSHFallsBackToSudoForRootOwnedGlobalNpmPrefix(t *testing.T) {
+	fixture := &npmGlobalPermissionFixture{
+		commandFixture: &commandFixture{available: map[string]bool{"npm": true, "sudo": true}, outputs: map[string]string{}},
+		installName:    "dsh",
+	}
+	version, err := InstallDSHWithVersion(context.Background(), fixture, "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != "0.1.5" || len(fixture.calls) != 3 || fixture.calls[1] != "sudo -n npm install --global @deepseek-ai/dsh@latest" {
+		t.Fatalf("unexpected sudo npm fallback=%q calls=%#v", version, fixture.calls)
 	}
 }
 
@@ -195,6 +248,45 @@ func TestEnsureTencentDeploymentPreservesUpstreamEnvAndStartsPinnedStack(t *test
 	}
 	if !strings.Contains(joined, "docker update --restart unless-stopped tdai-memory-core") || !strings.Contains(joined, "docker update --restart unless-stopped tdai-memory-hub") || !strings.Contains(joined, "docker update --restart unless-stopped tdai-proxy") {
 		t.Fatalf("managed restart policies were not set: %#v", fixture.calls)
+	}
+}
+
+func TestEnsureTencentDeploymentResolvesLatestDefaultHeadToImmutableCommit(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "tencent-memory")
+	deployDir := filepath.Join(root, "deploy", "global-images")
+	if err := os.MkdirAll(deployDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"verify.sh", "start-all.sh"} {
+		if err := os.WriteFile(filepath.Join(deployDir, name), []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, ".env.example"), []byte("MEMORY_LLM_MODEL=example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	latest := strings.Repeat("d", 40)
+	digest := func(name string) string { return `["` + name + `@sha256:` + strings.Repeat("c", 64) + `"]` }
+	fixture := &commandFixture{available: map[string]bool{"git": true, "docker": true}, outputs: map[string]string{
+		"git ls-remote " + TencentMemoryRepository + " HEAD":             latest + "\tHEAD\n",
+		"git -C " + root + " rev-parse HEAD":                             latest,
+		"docker inspect --format={{json .RepoDigests}} tdai-memory-core": digest("tdai/core"),
+		"docker inspect --format={{json .RepoDigests}} tdai-memory-hub":  digest("tdai/hub"),
+		"docker inspect --format={{json .RepoDigests}} tdai-proxy":       digest("tdai/proxy"),
+	}}
+	if err := EnsureTencentDeployment(context.Background(), fixture, TencentDeploymentOptions{Root: root, Runtime: testTencentRuntimeConfig()}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ReadTencentDeploymentManifest(root)
+	if err != nil || manifest.RequestedRef != latest || manifest.ResolvedCommit != latest {
+		t.Fatalf("latest Tencent manifest=%#v err=%v", manifest, err)
+	}
+	joined := strings.Join(fixture.calls, "\n")
+	if !strings.Contains(joined, "git ls-remote "+TencentMemoryRepository+" HEAD") || !strings.Contains(joined, "origin "+latest) {
+		t.Fatalf("latest Tencent resolution calls missing: %#v", fixture.calls)
 	}
 }
 
@@ -381,7 +473,7 @@ func TestTencentAdminKeyIsReadOnlyFromManagedDeployment(t *testing.T) {
 	}
 }
 
-func TestInstallDSHPluginsUsesProfilePluginMechanism(t *testing.T) {
+func TestInstallDSHPluginsUsesLatestProfilePluginMechanism(t *testing.T) {
 	fixture := &commandFixture{
 		available: map[string]bool{"pnpm": true, "uvx": true, "dsh": true},
 		outputs: map[string]string{
@@ -389,14 +481,14 @@ func TestInstallDSHPluginsUsesProfilePluginMechanism(t *testing.T) {
 			"dsh --profile headless --dump-config": "superpowers-dsh\ndsh-reverse-skill\n",
 		},
 	}
-	if err := InstallDSHPlugins(context.Background(), fixture, PinnedDSHVersion); err != nil {
+	if err := InstallDSHPlugins(context.Background(), fixture, ""); err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(fixture.calls, "\n")
 	for _, profile := range []string{"web", "headless"} {
-		for _, marker := range []string{"dsh plugin --profile " + profile + " add superpowers-dsh@0.1.1", "dsh plugin --profile " + profile + " add https://github.com/dhicoc/dsh-reverse-skill.git#" + PinnedReverseSkillCommit, "dsh plugin --profile " + profile + " add @deepseek-ai/dsh-mcp-client@" + PinnedMCPClientVersion} {
+		for _, marker := range []string{"dsh plugin --profile " + profile + " add superpowers-dsh@latest", "dsh plugin --profile " + profile + " add https://github.com/dhicoc/dsh-reverse-skill.git", "dsh plugin --profile " + profile + " add @deepseek-ai/dsh-mcp-client@latest"} {
 			if !strings.Contains(joined, marker) {
-				t.Fatalf("missing pinned DSH plugin operation %q in %#v", marker, fixture.calls)
+				t.Fatalf("missing latest DSH plugin operation %q in %#v", marker, fixture.calls)
 			}
 		}
 	}

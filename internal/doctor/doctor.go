@@ -173,9 +173,9 @@ func Check(ctx context.Context, options Options) Report {
 		} else if command == "node" {
 			version, versionErr := options.Probe.Run(ctx, "node", "--version")
 			if versionErr != nil {
-				add(CheckResult{Name: command, Status: StatusUnavailable, Message: "Node is installed but did not report a version.", Suggestion: "install Node 22.19+ or 24+, then rerun baron test"})
+				add(CheckResult{Name: command, Status: StatusUnavailable, Message: "Node is installed but did not report a version.", Suggestion: "install Node 22.19+ or the latest 24+ release, then rerun baron test"})
 			} else if !supportedNodeVersion(version) {
-				add(CheckResult{Name: command, Status: StatusIncomplete, Message: "Node version " + bounded(strings.TrimSpace(version), 40) + " is outside the pinned DSH support range.", Suggestion: "install Node 22.19+ or 24+, then rerun baron test"})
+				add(CheckResult{Name: command, Status: StatusIncomplete, Message: "Node version " + bounded(strings.TrimSpace(version), 40) + " is outside the supported DSH compatibility range.", Suggestion: "install Node 22.19+ or the latest 24+ release, then rerun baron test"})
 			} else {
 				add(CheckResult{Name: command, Status: StatusReady, Message: "Node is available (" + bounded(strings.TrimSpace(version), 40) + ")."})
 			}

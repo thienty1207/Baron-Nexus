@@ -174,7 +174,7 @@ func EnsureDSHBaseline(path string, options DSHOptions) (DSHReport, error) {
 		options.AdapterCommand = "baron hook dsh"
 	}
 	if options.Version == "" {
-		options.Version = PinnedDSHVersion
+		options.Version = LatestDependencySelector
 	}
 	root, err := readJSONMap(path)
 	if err != nil {

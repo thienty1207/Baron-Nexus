@@ -14,13 +14,12 @@ import (
 
 const (
 	TencentMemoryRepository = "https://github.com/TencentCloud/TencentDB-Agent-Memory.git"
-	TencentMemoryRef        = "97f94654280b2932c35ba4806a491999ed244cc9"
 	tencentProxyRuntimeUID  = "10001"
 )
 
 // TencentDeploymentOptions describes the Baron-managed copy of the official
-// global-images deployment. The repository and ref are explicit so a repair
-// cannot silently follow a moving upstream branch.
+// global-images deployment. An empty ref resolves the upstream default HEAD
+// once and then uses that immutable commit for the operation.
 type TencentDeploymentOptions struct {
 	Root       string
 	Repository string
@@ -30,7 +29,7 @@ type TencentDeploymentOptions struct {
 	PullLatest bool
 }
 
-// EnsureTencentDeployment fetches or verifies the pinned upstream deployment,
+// EnsureTencentDeployment fetches or verifies the latest resolved upstream deployment,
 // preserves its .env.example structure, and starts the official Core,
 // MemoryHub/Panel, Proxy, and combined Knowledge stack. It never prints command output because the upstream scripts may echo
 // credentials created during initialization.
@@ -44,22 +43,26 @@ func EnsureTencentDeployment(ctx context.Context, runner CommandRunner, options 
 	if options.Repository == "" {
 		options.Repository = TencentMemoryRepository
 	}
-	if options.Ref == "" {
-		options.Ref = TencentMemoryRef
-	}
-	if err := validateTencentRef(options.Ref); err != nil {
-		return err
-	}
 	if _, err := os.Lstat(options.Root); errors.Is(err, os.ErrNotExist) {
 		if missing := options.Runtime.MissingProviderValues(); len(missing) > 0 {
 			return errors.New("Tencent runtime configuration is required before the first checkout; set " + strings.Join(missing, ", ") + " or export the BARON_TENCENT_* variables, then rerun baron tencent-memory init")
 		}
 	}
 	if _, err := runner.LookPath("git"); err != nil {
-		return errors.New("Git is required to fetch the pinned Tencent Agent Memory deployment")
+		return errors.New("Git is required to fetch the latest Tencent Agent Memory deployment")
 	}
 	if _, err := runner.LookPath("docker"); err != nil {
 		return errors.New("Docker CLI is required for Tencent Agent Memory initialization; install Docker first")
+	}
+	if strings.TrimSpace(options.Ref) == "" {
+		resolvedRef, resolveErr := resolveLatestTencentRef(ctx, runner, options.Repository)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		options.Ref = resolvedRef
+	}
+	if err := validateTencentRef(options.Ref); err != nil {
+		return err
 	}
 	if err := ensureManagedCheckout(ctx, runner, options); err != nil {
 		return err
@@ -235,13 +238,13 @@ func ensureManagedCheckout(ctx context.Context, runner CommandRunner, options Te
 			return fmt.Errorf("create Tencent deployment parent: %w", err)
 		}
 		if _, err := runner.Run(ctx, "git", "clone", "--no-checkout", options.Repository, options.Root); err != nil {
-			return errors.New("clone the pinned Tencent Agent Memory repository")
+			return errors.New("clone the latest Tencent Agent Memory repository")
 		}
 		if _, err := runner.Run(ctx, "git", "-C", options.Root, "fetch", "--depth", "1", "origin", options.Ref); err != nil {
-			return errors.New("fetch the pinned Tencent Agent Memory revision")
+			return errors.New("fetch the resolved Tencent Agent Memory revision")
 		}
 		if _, err := runner.Run(ctx, "git", "-C", options.Root, "checkout", "--detach", options.Ref); err != nil {
-			return errors.New("check out the pinned Tencent Agent Memory revision")
+			return errors.New("check out the resolved Tencent Agent Memory revision")
 		}
 		return nil
 	}
@@ -264,10 +267,10 @@ func ensureManagedCheckout(ctx context.Context, runner CommandRunner, options Te
 		return errors.New("existing Tencent deployment directory is not a Git checkout; move it aside and retry")
 	}
 	if _, err := runner.Run(ctx, "git", "-C", options.Root, "fetch", "--depth", "1", "origin", options.Ref); err != nil {
-		return errors.New("refresh the pinned Tencent Agent Memory revision")
+		return errors.New("refresh the resolved Tencent Agent Memory revision")
 	}
 	if _, err := runner.Run(ctx, "git", "-C", options.Root, "checkout", "--detach", options.Ref); err != nil {
-		return errors.New("check out the pinned Tencent Agent Memory revision")
+		return errors.New("check out the resolved Tencent Agent Memory revision")
 	}
 	return nil
 }

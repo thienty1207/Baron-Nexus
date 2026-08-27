@@ -37,6 +37,11 @@ type DockerBootstrapOptions struct {
 	Downloader    FileDownloader
 	AptKeyPath    string
 	AptSourcePath string
+	// Refresh resolves the official stable repository and asks apt to install
+	// the latest available Docker Engine/Compose packages even when the
+	// daemon is already healthy. The normal health/readiness path leaves this
+	// false so diagnostics never mutate a user's host.
+	Refresh bool
 }
 
 type DockerBootstrapReport struct {
@@ -109,17 +114,38 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 	if dockerErr == nil {
 		report.DockerPath = dockerPath
 		if _, err := runner.Run(ctx, "docker", "info"); err == nil {
+			if !options.Refresh {
+				report.Ready = true
+				report.Message = "Docker Engine and daemon are ready."
+				return report, nil
+			}
+			if err := installDockerPackages(ctx, runner, options, distro, codename); err != nil {
+				return report, err
+			}
 			report.Ready = true
-			report.Message = "Docker Engine and daemon are ready."
+			report.Installed = true
+			report.UsedSudo = true
+			report.DaemonStarted = true
+			report.Message = "Docker Engine and daemon were refreshed from the official stable repository."
 			return report, nil
 		}
 		if _, err := runSudo(ctx, runner, "systemctl", "enable", "--now", "docker"); err == nil {
 			report.UsedSudo = true
 			report.DaemonStarted = true
-		} else if _, err := runSudo(ctx, runner, "docker", "info"); err == nil {
-			report.UsedSudo = true
 		}
 		if _, err := runSudo(ctx, runner, "docker", "info"); err == nil {
+			report.UsedSudo = true
+			if options.Refresh {
+				if err := installDockerPackages(ctx, runner, options, distro, codename); err != nil {
+					return report, err
+				}
+				report.Installed = true
+				report.DaemonStarted = true
+				report.Ready = true
+				report.NeedsRelogin = true
+				report.Message = "Docker Engine and daemon were refreshed from the official stable repository."
+				return report, nil
+			}
 			report.Ready = true
 			report.NeedsRelogin = true
 			report.Message = dockerPermissionMessage(report.DaemonStarted)

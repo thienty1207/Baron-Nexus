@@ -199,7 +199,23 @@ BLOCKED until the external gates above are available.
   script still correctly exits `21` while P19/P22/P27 external gates remain
   unchecked.
 
-## Current Baron Nexus expansion (P20-P28)
+## Fresh verification on 2026-08-27 — latest-at-run `0.1.4` implementation
+
+- P29 implementation tasks P29-T01..P29-T08 and focused latest-resolution
+  fixtures are complete in the current source. The implementation resolves
+  latest Baron/Node/uv/npm/pnpm/DSH/Codex/plugin/Tencent selectors at explicit
+  install time, retains checksum/manifest/rollback protection, and leaves
+  read-only diagnostics non-mutating.
+- The latest uv archive and checksum are resolved from one release tag and the
+  complete pair is retried once after a mismatch. Node uses the official
+  release index and NodeSource major channel; Docker refresh is explicit
+  bootstrap behavior only.
+- P29-T09..T10 and P29-TEST01..02 remain pending until the final artifact
+  build, checksum audit, GitHub push/tag, and public asset verification below
+  are recorded. P29-TEST03..05 remain external acceptance gates and must not be
+  inferred from fixtures.
+
+## Current Baron Nexus expansion (P20-P29)
 
 | Phase | Status | Fresh local evidence | Remaining external evidence |
 | --- | --- | --- | --- |
@@ -210,9 +226,10 @@ BLOCKED until the external gates above are available.
 | 24 | PASS | Stable registry, five-run reuse, remote reconstruction, same-name isolation, bounded Wiki seed and CodeGraph sync fixtures | Live Tencent asset provisioning |
 | 25 | PASS | Bounded context packets, relevant CodeGraph slices, DSH/Codex symmetry, stale-knowledge boundary, outage fail-open fixtures | Authenticated DSH/Codex handoff |
 | 26 | PASS | Typed queues, retries/dead-letter, freshness, secret corpus, backup/restore, stale-lease recovery, SIGKILL, concurrency and rollback fixtures; live disposable-project outage recovery and live lifecycle queue drain also passed | Real service restart/volume and clean-machine power-loss acceptance |
-| 27 | BLOCKED | Linux/Windows quick-start guidance, native artifacts, SBOM/checksums, rollback metadata, final acceptance report, and release/report hash agreement | Historical public Linux `v0.1.1` and `v0.1.2` download/update and release checksum verification pass; the `v0.1.3` candidate carries the concise DeepSeek key command; live user command sequence, first-installer sudo flow, clean Ubuntu, Windows runtime, and full DSH/Codex/Tencent scenarios remain open |
+| 27 | BLOCKED | Linux/Windows quick-start guidance, native artifacts, SBOM/checksums, rollback metadata, final acceptance report, and release/report hash agreement | Historical public Linux `v0.1.1`, `v0.1.2`, and `v0.1.3` download/update and release checksum verification pass; the current `v0.1.4` candidate carries latest-at-run dependency guidance; live user command sequence, first-installer sudo flow, clean Ubuntu, Windows runtime, and full DSH/Codex/Tencent scenarios remain open |
 | 28 | BLOCKED | Validated provider credentials, visible DeepSeek prompt policy, atomic DSH/Tencent rotation, bounded sudo reauthorization, and Ubuntu/Debian Docker/Node/pnpm/uv bootstrap | Local Go/fixture/race-container and shell evidence pass; clean first-install and published-provider replacement/outage evidence remain open |
+| 29 | BLOCKED | Latest-at-run release selectors, host refresh, Docker refresh, `0.1.4` version/docs, and release automation | Focused/latest fixtures and local source checks pass; final artifacts/public assets plus clean Ubuntu/Debian, Windows, and full live dependency acceptance remain open |
 
-P20, P21, P23, P24, P25, and P26 are local-contract PASS only. P22, P27, and
-P28 remain BLOCKED by the explicitly listed live dependencies; no mock fixture
+P20, P21, P23, P24, P25, and P26 are local-contract PASS only. P22, P27, P28,
+and P29 remain BLOCKED by the explicitly listed live dependencies; no mock fixture
 is counted as a live Tencent, provider, or authenticated-agent acceptance pass.

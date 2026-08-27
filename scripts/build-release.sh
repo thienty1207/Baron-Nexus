@@ -3,7 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 GO_BIN=${GO_BIN:-go}
-VERSION=${BARON_VERSION:-0.1.3}
+VERSION=${BARON_VERSION:-0.1.4}
 OUT=${BARON_RELEASE_DIR:-"$ROOT/dist/$VERSION"}
 SOURCE_REVISION=${BARON_SOURCE_REVISION:-unknown}
 if ! command -v "$GO_BIN" >/dev/null 2>&1 && [ ! -x "$GO_BIN" ]; then
@@ -24,7 +24,7 @@ if [ -d "$ROOT/target" ]; then
 fi
 
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  printf '%s\n' 'BARON_VERSION must be a semantic version such as 0.1.3.' >&2
+  printf '%s\n' 'BARON_VERSION must be a semantic version such as 0.1.4.' >&2
   exit 2
 fi
 
@@ -46,7 +46,7 @@ cat > "$OUT/release-manifest.json" <<EOF
   "sbom": "SBOM_MODULES.txt",
   "linux_bootstrap": "baron install and baron tencent-memory init bootstrap Docker Engine/Compose, Node/npm/npx, pnpm, and uv/uvx only on supported Ubuntu/Debian after sudo preflight",
   "windows_prerequisites": "Docker Desktop, WSL2, Ubuntu, and Tencent services are user-installed; Baron does not claim silent UI automation",
-  "rollback": "baron repair plus native binary/Tencent pinned-deployment rollback"
+  "rollback": "baron repair plus native binary/Tencent immutable-manifest rollback"
 }
 EOF
 (cd "$OUT" && sha256sum baron-linux-amd64 baron-windows-amd64.exe install.sh install.ps1 release-manifest.json GO_TOOLCHAIN.txt SBOM_MODULES.txt > SHA256SUMS)

@@ -128,8 +128,9 @@ promote external acceptance items to `[X]`.
 | P17 | [X] | Local security, permission, redaction, tamper, bounded-output, and vet evidence complete. |
 | P18 | [ ] | Release artifacts, `baron --version`, verified `baron install/update`, and Linux installer smoke pass; public release and Windows runtime acceptance remain blocked. |
 | P19 | [ ] | Local implementation/report/evidence are current, but the full external release gate is not green. |
-| P20-P27 | [ ] | Baron Nexus expansion is locally implemented through P26; the public `v0.1.1` Linux release/download/update path and `v0.1.2` release are historical, while the `v0.1.3` candidate carries the concise DeepSeek key-rotation command and installer guidance; P22 live Tencent and P27 clean-machine, authenticated-agent, first-installer, and Windows-runtime gates remain blocked. |
+| P20-P27 | [ ] | Baron Nexus expansion is locally implemented through P26; the public `v0.1.1`, `v0.1.2`, and `v0.1.3` releases are historical, while the `v0.1.4` candidate carries latest-at-run dependency resolution and installer guidance; P22 live Tencent and P27 clean-machine, authenticated-agent, first-installer, and Windows-runtime gates remain blocked. |
 | P28 | [ ] | Credential validation, protected rotation, sudo reauthorization, and Ubuntu/Debian dependency bootstrap are implemented with local fixtures; clean-machine and real provider rotation acceptance remain open. |
+| P29 | [ ] | Latest-at-run dependency refresh, `0.1.4` release artifacts, and publication are implemented locally; clean Ubuntu/Debian, Windows, and full live latest-dependency acceptance remain open. |
 
 ## P0 — Baseline, contracts, and Go repository bootstrap `[X]`
 
@@ -1003,6 +1004,35 @@ credential rotation have been exercised.
 - [X] **P28-TEST04** Full local Go tests, vet/format/diff checks, shell syntax, installer preflight, and platform-guidance checks pass for the implementation.
 - [ ] **P28-TEST05** A clean Ubuntu/Debian machine runs `./install.sh` and `baron install` after one sudo authorization, with missing dependencies installed and no manual package steps.
 - [ ] **P28-TEST06** A real provider-backed run proves valid-key reuse, wrong-key rejection, replacement, and network-outage no-overwrite behavior on the published release.
+
+## P29 — Latest-at-run dependency refresh and `0.1.4` release `[ ]`
+
+**Goal:** Make every automatic dependency selector resolve the newest
+compatible upstream release or revision at the time of an explicit install or
+initializer, then publish the verified Baron Nexus `0.1.4` artifacts. Read-only
+diagnostics remain non-mutating and unresolved external acceptance remains
+explicitly unchecked.
+
+### Implementation tasks
+
+- [X] **P29-T01** Record the latest-at-run architecture, integrity, rollback, secret-safety, and platform boundary in the release plan.
+- [X] **P29-T02** Resolve uv's latest release tag once, download the matching archive/checksum pair, retry a complete pair after mismatch, and report bounded digest evidence.
+- [X] **P29-T03** Resolve the newest supported Node major from the official release index and refresh Node/npm/npx, pnpm, and uv/uvx during Ubuntu/Debian host bootstrap.
+- [X] **P29-T04** Refresh the official Docker Engine/Compose package set during explicit bootstrap while keeping readiness/doctor checks read-only.
+- [X] **P29-T05** Install latest DSH, DSH plugins, and Codex package selectors and record the command-reported versions in receipts.
+- [X] **P29-T06** Resolve Tencent default `HEAD` to an immutable commit for latest deployment work while preserving manifest-based rollback.
+- [X] **P29-T07** Make shell and PowerShell release installers resolve latest Baron tags instead of using mutable release-download redirects.
+- [X] **P29-T08** Bump the current version contract, update user/release documentation, and add the `0.1.4` release contract.
+- [ ] **P29-T09** Build and verify Linux/Windows `0.1.4` artifacts, checksums, SBOM, and release metadata.
+- [ ] **P29-T10** Push `main`, tag `v0.1.4`, publish through GitHub Actions, and verify public assets and Linux smoke output.
+
+### Mandatory tests
+
+- [X] **P29-TEST01** Latest uv retry/tag, Node index, DSH/Codex latest selector, Tencent latest-HEAD, and Docker refresh fixtures pass.
+- [X] **P29-TEST02** Full local Go tests, vet, formatting/diff, shell syntax, installer-preflight, platform, branding, and DSH adapter checks pass.
+- [ ] **P29-TEST03** A clean Ubuntu/Debian machine completes the published `./install.sh` and `baron install` flow with missing dependencies.
+- [ ] **P29-TEST04** Windows executes the published PowerShell installer and runtime guidance scenario.
+- [ ] **P29-TEST05** Real latest DSH/Codex/Tencent/provider-rotation and full CodeGraph/Wiki/Skill acceptance are recorded without fixture-only claims.
 
 ## Current evidence ledger
 
