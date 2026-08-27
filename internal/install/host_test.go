@@ -161,6 +161,33 @@ func TestEnsureHostToolchainUsesSudoPreflightBeforePackageWork(t *testing.T) {
 	}
 }
 
+func TestEnsureHostToolchainReportsDependencyProgress(t *testing.T) {
+	osRelease := filepath.Join(t.TempDir(), "os-release")
+	if err := os.WriteFile(osRelease, []byte("ID=ubuntu\nVERSION_ID=26.04\nVERSION_CODENAME=questing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fixture := &sudoReauthFixture{
+		available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true, "uv": true, "uvx": true},
+		outputs:   map[string]string{"node --version": "v24.19.0\n"},
+	}
+	archive := uvTestArchive(t)
+	digest := sha256.Sum256(archive)
+	var output bytes.Buffer
+	if _, err := EnsureHostToolchain(context.Background(), fixture, HostToolchainOptions{
+		GOOS: "linux", GOARCH: "amd64", OSReleasePath: osRelease, Home: t.TempDir(),
+		Downloader: hostDownloadFixture{archive: archive, checksum: hex.EncodeToString(digest[:])},
+		Progress:   NewProgressReporter(&output),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := output.String()
+	for _, want := range []string{"sudo authorization", "Node.js", "pnpm", "uv"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("host progress output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestEnsureHostToolchainBootstrapsMissingNodeAndPnpm(t *testing.T) {
 	osRelease := filepath.Join(t.TempDir(), "os-release")
 	if err := os.WriteFile(osRelease, []byte("ID=debian\nVERSION_ID=13\nVERSION_CODENAME=trixie\n"), 0o600); err != nil {

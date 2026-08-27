@@ -1,15 +1,20 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/baron-shared-brain/baron/internal/install"
 )
 
 func TestRunBootstrapExecutesOneTimeSetupInOrder(t *testing.T) {
 	var got []string
+	var output bytes.Buffer
 	steps := BootstrapSteps{
+		Progress:  install.NewProgressReporter(&output),
 		Preflight: func(context.Context) error { got = append(got, "preflight"); return nil },
 		DSH:       func() error { got = append(got, "dsh"); return nil },
 		Codex:     func() error { got = append(got, "codex"); return nil },
@@ -22,6 +27,11 @@ func TestRunBootstrapExecutesOneTimeSetupInOrder(t *testing.T) {
 	want := []string{"preflight", "dsh", "codex", "tencent", "setup"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("steps=%v want=%v", got, want)
+	}
+	for _, want := range []string{"DeepSeek Harness", "Codex CLI", "Tencent Memory", "Baron project"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("bootstrap progress output missing %q:\n%s", want, output.String())
+		}
 	}
 }
 

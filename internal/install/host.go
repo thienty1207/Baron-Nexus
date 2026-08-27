@@ -38,6 +38,7 @@ type HostToolchainOptions struct {
 	OSReleasePath string
 	Home          string
 	Downloader    FileDownloader
+	Progress      ProgressReporter
 }
 
 // HostToolchainReport describes the host prerequisites Baron verified or
@@ -80,11 +81,14 @@ func EnsureHostToolchain(ctx context.Context, runner CommandRunner, options Host
 	if distro.ID != "ubuntu" && distro.ID != "debian" {
 		return HostToolchainReport{}, fmt.Errorf("automatic host dependency installation supports Ubuntu/Debian only; detected %q", distro.ID)
 	}
+	reportStep(options.Progress, "Preparing Ubuntu/Debian host dependencies...")
+	reportStep(options.Progress, "Requesting sudo authorization for host dependencies...")
 	if err := preflightSudo(ctx, runner); err != nil {
 		return HostToolchainReport{}, err
 	}
+	reportStep(options.Progress, "sudo authorization accepted")
 	if options.Downloader == nil {
-		options.Downloader = httpFileDownloader{}
+		options.Downloader = httpFileDownloader{Progress: options.Progress}
 	}
 	home := strings.TrimSpace(options.Home)
 	if home == "" {
@@ -106,20 +110,24 @@ func EnsureHostToolchain(ctx context.Context, runner CommandRunner, options Host
 		Architecture: options.GOARCH,
 		Installed:    []string{},
 	}
+	reportStep(options.Progress, "Preparing Node.js/npm/npx...")
 	if installed, err := ensureNodeToolchain(ctx, runner, options, distro); err != nil {
 		return report, err
 	} else if installed {
 		report.Installed = append(report.Installed, "node/npm/npx")
+		reportStep(options.Progress, "Node.js/npm/npx ready.")
 	}
-	if installed, err := ensurePnpm(ctx, runner); err != nil {
+	if installed, err := ensurePnpm(ctx, runner, options.Progress); err != nil {
 		return report, err
 	} else if installed {
 		report.Installed = append(report.Installed, "pnpm")
+		reportStep(options.Progress, "pnpm ready.")
 	}
-	if installed, err := ensureUV(ctx, runner, options.Downloader, options.GOARCH, uvBinDir); err != nil {
+	if installed, err := ensureUV(ctx, runner, options.Downloader, options.GOARCH, uvBinDir, options.Progress); err != nil {
 		return report, err
 	} else if installed {
 		report.Installed = append(report.Installed, "uv/uvx")
+		reportStep(options.Progress, "uv/uvx ready.")
 	}
 	report.Ready = true
 	report.Message = "Node/npm/npx, pnpm, and uv/uvx are ready."
@@ -149,11 +157,23 @@ func runSudo(ctx context.Context, runner CommandRunner, args ...string) (string,
 	return output, nil
 }
 
+func runSudoProgress(ctx context.Context, runner CommandRunner, reporter ProgressReporter, label string, args ...string) (string, error) {
+	reportStep(reporter, label+"...")
+	output, err := runSudo(ctx, runner, args...)
+	if err != nil {
+		reportStep(reporter, label+" failed.")
+		return output, err
+	}
+	reportStep(reporter, label+" complete.")
+	return output, nil
+}
+
 type nodeReleaseMetadata struct {
 	Version string `json:"version"`
 }
 
-func resolveLatestNodeMajor(ctx context.Context, downloader FileDownloader) (string, error) {
+func resolveLatestNodeMajor(ctx context.Context, downloader FileDownloader, reporters ...ProgressReporter) (string, error) {
+	reporter := firstProgressReporter(reporters...)
 	if downloader == nil {
 		return "", errors.New("Node release downloader is not configured")
 	}
@@ -163,7 +183,7 @@ func resolveLatestNodeMajor(ctx context.Context, downloader FileDownloader) (str
 	}
 	defer os.RemoveAll(tempRoot)
 	metadataPath := filepath.Join(tempRoot, "index.json")
-	if err := downloader.Download(ctx, nodeReleaseIndexURL, metadataPath); err != nil {
+	if err := downloadFile(ctx, downloader, reporter, "latest Node.js release metadata", nodeReleaseIndexURL, metadataPath); err != nil {
 		return "", errors.New("resolve the latest Node release")
 	}
 	data, err := os.ReadFile(metadataPath)
@@ -190,14 +210,14 @@ func resolveLatestNodeMajor(ctx context.Context, downloader FileDownloader) (str
 }
 
 func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options HostToolchainOptions, distro linuxDistribution) (bool, error) {
-	latestMajor, err := resolveLatestNodeMajor(ctx, options.Downloader)
+	latestMajor, err := resolveLatestNodeMajor(ctx, options.Downloader, options.Progress)
 	if err != nil {
 		return false, err
 	}
-	if _, err := runSudo(ctx, runner, "apt-get", "update"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Refreshing apt metadata for Node.js", "apt-get", "update"); err != nil {
 		return false, errors.New("Node bootstrap could not refresh apt metadata; retry after sudo authorization")
 	}
-	if _, err := runSudo(ctx, runner, "apt-get", "install", "-y", "ca-certificates", "gnupg"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing Node.js bootstrap prerequisites", "apt-get", "install", "-y", "ca-certificates", "gnupg"); err != nil {
 		return false, errors.New("Node bootstrap could not install its package prerequisites")
 	}
 	tempRoot, err := os.MkdirTemp("", "baron-node-bootstrap-")
@@ -208,36 +228,36 @@ func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options Host
 	keyPath := filepath.Join(tempRoot, "nodesource.asc")
 	keyringPath := filepath.Join(tempRoot, "nodesource.gpg")
 	sourcePath := filepath.Join(tempRoot, "nodesource.sources")
-	if err := options.Downloader.Download(ctx, nodeSourceKeyURL, keyPath); err != nil {
+	if err := downloadFile(ctx, options.Downloader, options.Progress, "NodeSource signing key", nodeSourceKeyURL, keyPath); err != nil {
 		return false, errors.New("download the official NodeSource signing key after sudo preflight")
 	}
-	if _, err := runSudo(ctx, runner, "gpg", "--batch", "--yes", "--dearmor", "--output", keyringPath, keyPath); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Verifying the NodeSource signing key", "gpg", "--batch", "--yes", "--dearmor", "--output", keyringPath, keyPath); err != nil {
 		return false, errors.New("verify the official NodeSource signing key")
 	}
 	sources := "Types: deb\nURIs: " + nodeSourceRepository + latestMajor + ".x\nSuites: nodistro\nComponents: main\nArchitectures: " + nodeRepositoryArchitecture(options.GOARCH) + "\nSigned-By: /etc/apt/keyrings/nodesource.gpg\n\n"
 	if err := os.WriteFile(sourcePath, []byte(sources), 0o600); err != nil {
 		return false, fmt.Errorf("write NodeSource repository definition: %w", err)
 	}
-	if _, err := runSudo(ctx, runner, "install", "-m", "0755", "-d", "/etc/apt/keyrings"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Preparing the NodeSource apt keyring", "install", "-m", "0755", "-d", "/etc/apt/keyrings"); err != nil {
 		return false, errors.New("create the NodeSource apt keyring directory")
 	}
-	if _, err := runSudo(ctx, runner, "install", "-m", "0644", keyringPath, "/etc/apt/keyrings/nodesource.gpg"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing the NodeSource signing key", "install", "-m", "0644", keyringPath, "/etc/apt/keyrings/nodesource.gpg"); err != nil {
 		return false, errors.New("install the official NodeSource signing key")
 	}
-	if _, err := runSudo(ctx, runner, "install", "-m", "0644", sourcePath, "/etc/apt/sources.list.d/nodesource.sources"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing the NodeSource apt repository definition", "install", "-m", "0644", sourcePath, "/etc/apt/sources.list.d/nodesource.sources"); err != nil {
 		return false, errors.New("install the official NodeSource apt repository definition")
 	}
-	if _, err := runSudo(ctx, runner, "apt-get", "update"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Refreshing the NodeSource apt repository", "apt-get", "update"); err != nil {
 		return false, errors.New("Node bootstrap could not refresh the NodeSource apt repository")
 	}
-	if _, err := runSudo(ctx, runner, "apt-get", "install", "-y", "nodejs"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing Node.js", "apt-get", "install", "-y", "nodejs"); err != nil {
 		return false, fmt.Errorf("install the latest supported Node major on %s: %w", distro.ID, err)
 	}
 	if output, versionErr := runner.Run(ctx, "node", "--version"); versionErr != nil || !supportedHostNodeVersion(output) {
 		return false, fmt.Errorf("Node was installed but is below the supported 22.19+ or 24+ version (latest major %s)", latestMajor)
 	}
 	if !commandAvailable(runner, "npm") || !commandAvailable(runner, "npx") {
-		if _, err := runSudo(ctx, runner, "apt-get", "install", "-y", "npm"); err != nil {
+		if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing npm and npx", "apt-get", "install", "-y", "npm"); err != nil {
 			return false, errors.New("Node was installed but npm/npx could not be installed")
 		}
 	}
@@ -247,11 +267,12 @@ func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options Host
 	return true, nil
 }
 
-func ensurePnpm(ctx context.Context, runner CommandRunner) (bool, error) {
+func ensurePnpm(ctx context.Context, runner CommandRunner, reporters ...ProgressReporter) (bool, error) {
+	reporter := firstProgressReporter(reporters...)
 	if !commandAvailable(runner, "npm") {
 		return false, errors.New("pnpm bootstrap requires npm")
 	}
-	if _, err := runSudo(ctx, runner, "npm", "install", "--global", "pnpm@latest"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, reporter, "Installing pnpm through npm", "npm", "install", "--global", "pnpm@latest"); err != nil {
 		return false, errors.New("install the latest pnpm through npm")
 	}
 	if !commandAvailable(runner, "pnpm") {
@@ -260,7 +281,8 @@ func ensurePnpm(ctx context.Context, runner CommandRunner) (bool, error) {
 	return true, nil
 }
 
-func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownloader, goarch, binDir string) (bool, error) {
+func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownloader, goarch, binDir string, reporters ...ProgressReporter) (bool, error) {
+	reporter := firstProgressReporter(reporters...)
 	asset, ok := uvLinuxAsset(goarch)
 	if !ok {
 		return false, fmt.Errorf("uv bootstrap does not support Linux architecture %q", goarch)
@@ -270,7 +292,7 @@ func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownload
 		return false, fmt.Errorf("create user-owned uv bootstrap workspace: %w", err)
 	}
 	defer os.RemoveAll(tempRoot)
-	tag, err := resolveLatestUVTag(ctx, downloader, filepath.Join(tempRoot, "release.json"))
+	tag, err := resolveLatestUVTag(ctx, downloader, filepath.Join(tempRoot, "release.json"), reporter)
 	if err != nil {
 		return false, err
 	}
@@ -279,10 +301,10 @@ func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownload
 		archivePath = filepath.Join(tempRoot, fmt.Sprintf("%s.%d", asset, attempt))
 		checksumPath := archivePath + ".sha256"
 		baseURL := uvReleaseDownloadURL + "/" + tag
-		if err := downloader.Download(ctx, baseURL+"/"+asset, archivePath); err != nil {
+		if err := downloadFile(ctx, downloader, reporter, "uv archive (attempt "+strconv.Itoa(attempt)+")", baseURL+"/"+asset, archivePath); err != nil {
 			return false, errors.New("download the latest uv release after sudo preflight")
 		}
-		if err := downloader.Download(ctx, baseURL+"/"+asset+".sha256", checksumPath); err != nil {
+		if err := downloadFile(ctx, downloader, reporter, "uv archive checksum", baseURL+"/"+asset+".sha256", checksumPath); err != nil {
 			return false, errors.New("download the uv release checksum")
 		}
 		checksumData, err := os.ReadFile(checksumPath)
@@ -311,6 +333,7 @@ func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownload
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		return false, fmt.Errorf("create uv install directory: %w", err)
 	}
+	reportStep(reporter, "Installing verified uv and uvx...")
 	for _, name := range []string{"uv", "uvx"} {
 		data, exists := binaries[name]
 		if !exists {
@@ -330,11 +353,12 @@ type uvReleaseMetadata struct {
 	TagName string `json:"tag_name"`
 }
 
-func resolveLatestUVTag(ctx context.Context, downloader FileDownloader, destination string) (string, error) {
+func resolveLatestUVTag(ctx context.Context, downloader FileDownloader, destination string, reporters ...ProgressReporter) (string, error) {
+	reporter := firstProgressReporter(reporters...)
 	if downloader == nil {
 		return "", errors.New("uv release downloader is not configured")
 	}
-	if err := downloader.Download(ctx, uvReleaseAPIURL, destination); err != nil {
+	if err := downloadFile(ctx, downloader, reporter, "latest uv release metadata", uvReleaseAPIURL, destination); err != nil {
 		return "", errors.New("resolve the latest uv release")
 	}
 	data, err := os.ReadFile(destination)

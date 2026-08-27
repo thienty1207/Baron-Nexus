@@ -52,6 +52,7 @@ type App struct {
 }
 
 func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
+	progress := install.NewProgressReporter(out)
 	return cli.Options{
 		Version: version.Value,
 		Out:     out, Err: errOut, In: a.Input,
@@ -69,10 +70,10 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 			return classifyError(a.restoreWithOptions(context.Background(), archive, replaceExisting))
 		},
 		Install: func() (string, error) {
-			message, err := a.installAndBootstrap(context.Background())
+			message, err := a.installAndBootstrap(context.Background(), progress)
 			return message, classifyError(err)
 		},
-		Update:        func() (string, error) { return a.installBaronBinary(false) },
+		Update:        func() (string, error) { return a.installBaronBinary(false, progress) },
 		SetCredential: func(provider string) error { return classifyError(a.SetCredential(provider)) },
 		Hook: func(client, event string, input io.Reader, output io.Writer) error {
 			return a.HandleHook(context.Background(), client, event, "", input, output)
@@ -113,7 +114,7 @@ func codexLoginNotice() string {
 	return codexLoginAction
 }
 
-func (a *App) installBaronBinary(force bool) (string, error) {
+func (a *App) installBaronBinary(force bool, reporter install.ProgressReporter) (string, error) {
 	target := a.ExecutablePath
 	if target == "" {
 		var err error
@@ -129,6 +130,7 @@ func (a *App) installBaronBinary(force bool) (string, error) {
 	if a.ReleaseClient != nil {
 		client = *a.ReleaseClient
 	}
+	client.Progress = reporter
 	if client.HTTPClient == nil {
 		client.HTTPClient = a.HTTPClient
 	}

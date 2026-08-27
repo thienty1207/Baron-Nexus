@@ -17,51 +17,70 @@ type BootstrapSteps struct {
 	Codex     func() error
 	Tencent   func(context.Context) error
 	Setup     func(context.Context) error
+	Progress  install.ProgressReporter
 }
 
 func runBootstrap(ctx context.Context, steps BootstrapSteps) error {
 	if steps.Preflight == nil {
 		return errors.New("Baron bootstrap host preflight is not configured")
 	}
-	if err := steps.Preflight(ctx); err != nil {
+	if err := runBootstrapStep(steps.Progress, "Verifying Baron bootstrap prerequisites", func() error {
+		return steps.Preflight(ctx)
+	}); err != nil {
 		return fmt.Errorf("Baron bootstrap host preflight failed: %w", err)
 	}
 	if steps.DSH == nil {
 		return errors.New("Baron bootstrap DSH step is not configured")
 	}
-	if err := steps.DSH(); err != nil {
+	if err := runBootstrapStep(steps.Progress, "Initializing DeepSeek Harness", steps.DSH); err != nil {
 		return fmt.Errorf("Baron bootstrap DSH initialization failed: %w", err)
 	}
 	if steps.Codex == nil {
 		return errors.New("Baron bootstrap Codex step is not configured")
 	}
-	if err := steps.Codex(); err != nil {
+	if err := runBootstrapStep(steps.Progress, "Installing Codex CLI", steps.Codex); err != nil {
 		return fmt.Errorf("Baron bootstrap Codex initialization failed: %w", err)
 	}
 	if steps.Tencent == nil {
 		return errors.New("Baron bootstrap Tencent step is not configured")
 	}
-	if err := steps.Tencent(ctx); err != nil {
+	if err := runBootstrapStep(steps.Progress, "Provisioning Tencent Memory", func() error {
+		return steps.Tencent(ctx)
+	}); err != nil {
 		return fmt.Errorf("Baron bootstrap Tencent initialization failed: %w", err)
 	}
 	if steps.Setup == nil {
 		return errors.New("Baron bootstrap project setup step is not configured")
 	}
-	if err := steps.Setup(ctx); err != nil {
+	if err := runBootstrapStep(steps.Progress, "Setting up the current Baron project", func() error {
+		return steps.Setup(ctx)
+	}); err != nil {
 		return fmt.Errorf("Baron bootstrap project setup failed: %w", err)
 	}
 	return nil
 }
 
-func (a *App) installAndBootstrap(ctx context.Context) (string, error) {
+func runBootstrapStep(reporter install.ProgressReporter, label string, action func() error) error {
+	reportProgressStep(reporter, label+"...")
+	err := action()
+	if err != nil {
+		reportProgressStep(reporter, label+" failed.")
+		return err
+	}
+	reportProgressStep(reporter, label+" complete.")
+	return nil
+}
+
+func (a *App) installAndBootstrap(ctx context.Context, reporter install.ProgressReporter) (string, error) {
+	reportProgressStep(reporter, "Starting Baron install; dependency setup may take several minutes.")
 	// Host authorization and dependency work must precede the release download
 	// as well as the DSH/Tencent downloads. The first-run coordinator is the
 	// only path that owns this ordering; individual `baron update` remains a
 	// binary-only operation.
-	if err := a.preflightBootstrap(ctx); err != nil {
+	if err := a.preflightBootstrap(ctx, reporter); err != nil {
 		return "", err
 	}
-	releaseMessage, err := a.installBaronBinary(true)
+	releaseMessage, err := a.installBaronBinary(true, reporter)
 	if err != nil {
 		return "", err
 	}
@@ -74,6 +93,7 @@ func (a *App) installAndBootstrap(ctx context.Context) (string, error) {
 			_, err := a.SetupProject(ctx, "")
 			return err
 		},
+		Progress: reporter,
 	}); err != nil {
 		return "", err
 	}
@@ -88,12 +108,12 @@ func bootstrapCompletionMessage(releaseMessage string) string {
 	return message
 }
 
-func (a *App) preflightBootstrap(ctx context.Context) error {
+func (a *App) preflightBootstrap(ctx context.Context, reporter install.ProgressReporter) error {
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		return fmt.Errorf("automatic Baron bootstrap supports Linux and Windows only; detected %s", runtime.GOOS)
 	}
 	if runtime.GOOS == "linux" {
-		report, err := install.EnsureHostToolchain(ctx, a.commandRunner(), install.HostToolchainOptions{})
+		report, err := install.EnsureHostToolchain(ctx, a.commandRunner(), install.HostToolchainOptions{Progress: reporter})
 		if err != nil {
 			return err
 		}
@@ -101,7 +121,7 @@ func (a *App) preflightBootstrap(ctx context.Context) error {
 			return errors.New("host dependency preflight did not report a ready Node/pnpm/uv toolchain")
 		}
 	}
-	report, err := install.EnsureDocker(ctx, a.commandRunner(), install.DockerBootstrapOptions{Refresh: true})
+	report, err := install.EnsureDocker(ctx, a.commandRunner(), install.DockerBootstrapOptions{Progress: reporter, Refresh: true})
 	if err != nil {
 		return err
 	}
@@ -109,4 +129,10 @@ func (a *App) preflightBootstrap(ctx context.Context) error {
 		return errors.New("Docker host preflight did not report a ready runtime")
 	}
 	return nil
+}
+
+func reportProgressStep(reporter install.ProgressReporter, label string) {
+	if reporter != nil {
+		reporter.Step(label)
+	}
 }

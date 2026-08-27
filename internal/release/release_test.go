@@ -1,6 +1,7 @@
 package release
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,6 +14,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/baron-shared-brain/baron/internal/install"
 )
 
 func TestInstallLatestDownloadsVerifiesAndAtomicallyInstallsCandidate(t *testing.T) {
@@ -60,6 +63,32 @@ func TestInstallLatestDownloadsVerifiesAndAtomicallyInstallsCandidate(t *testing
 	}
 	if _, err := os.Stat(report.Rollback); err != nil {
 		t.Fatalf("rollback artifact missing: %v", err)
+	}
+}
+
+func TestInstallLatestReportsReleaseDownloadProgress(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("fixture candidate is a Linux amd64 executable")
+	}
+	candidate := []byte("#!/bin/sh\necho 'baron 0.1.0'\n")
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.0","artifacts":["baron-linux-amd64"]}`)
+	sums := checksumLine(candidate, "baron-linux-amd64") + "\n" + checksumLine(manifest, "release-manifest.json") + "\n"
+	server := releaseFixtureServer(t, candidate, manifest, []byte(sums))
+	defer server.Close()
+
+	var output bytes.Buffer
+	client := Client{
+		HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo",
+		GOOS: "linux", GOARCH: "amd64", AllowInsecure: true,
+		Progress: install.NewProgressReporter(&output),
+	}
+	if _, err := client.InstallLatest(context.Background(), filepath.Join(t.TempDir(), "baron"), "0.0.9", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Checking latest Baron release", "release manifest", "Baron binary"} {
+		if !strings.Contains(output.String(), want) {
+			t.Fatalf("release progress output missing %q:\n%s", want, output.String())
+		}
 	}
 }
 

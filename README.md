@@ -1,6 +1,6 @@
 # Baron Nexus
 
-Current release: `0.1.5` — fixes large Ubuntu uv archive downloads while retaining the latest-at-run
+Current release: `0.1.6` — adds visible bootstrap/download progress while retaining the latest-at-run
 dependency refresh, concise DeepSeek key rotation, and automated
 Ubuntu/Debian first-install bootstrap.
 
@@ -31,7 +31,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.5`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.6`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
 latest Node/uv releases at run time, and refreshes Docker Engine/Compose,
@@ -60,7 +60,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.5`. The PowerShell installer resolves the
+The expected output is `baron 0.1.6`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
@@ -106,6 +106,24 @@ identity or user-owned agent configuration. On Ubuntu/Debian, Baron performs
 operations, and never receives, echoes, or stores the password. If
 authorization expires, Baron requests sudo again once and stops with a repair
 instruction if reauthentication fails.
+
+During `baron install` and `baron update`, Baron prints human-readable progress
+for each bootstrap phase. Network downloads show the transferred size and
+percentage when the source provides a size; package operations show their
+start and completion so a long `sudo` or apt operation is not mistaken for a
+hung process. Passwords, provider keys, and command output are never included
+in these progress lines.
+
+Example:
+
+```text
+[Baron] Requesting sudo authorization for host dependencies...
+[Baron] sudo authorization accepted
+[Baron] Downloading uv archive (attempt 1)...
+[Baron]   uv archive (attempt 1): 12.0 MiB/19.3 MiB (62%)
+[Baron] uv archive (attempt 1) downloaded.
+[Baron] Installing verified uv and uvx...
+```
 
 ### 3. Later version refresh: `baron update`
 

@@ -35,6 +35,7 @@ type DockerBootstrapOptions struct {
 	GOARCH        string
 	OSReleasePath string
 	Downloader    FileDownloader
+	Progress      ProgressReporter
 	AptKeyPath    string
 	AptSourcePath string
 	// Refresh resolves the official stable repository and asks apt to install
@@ -101,9 +102,11 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 	if strings.TrimSpace(codename) == "" {
 		return DockerBootstrapReport{}, fmt.Errorf("could not determine %s release codename; install Docker manually and rerun", distro.ID)
 	}
+	reportStep(options.Progress, "Requesting sudo authorization for Docker bootstrap...")
 	if err := preflightSudo(ctx, runner); err != nil {
 		return DockerBootstrapReport{}, err
 	}
+	reportStep(options.Progress, "sudo authorization accepted")
 
 	report := DockerBootstrapReport{
 		Distribution: distro.ID,
@@ -117,6 +120,7 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 			if !options.Refresh {
 				report.Ready = true
 				report.Message = "Docker Engine and daemon are ready."
+				reportStep(options.Progress, "Docker Engine is already ready.")
 				return report, nil
 			}
 			if err := installDockerPackages(ctx, runner, options, distro, codename); err != nil {
@@ -149,6 +153,7 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 			report.Ready = true
 			report.NeedsRelogin = true
 			report.Message = dockerPermissionMessage(report.DaemonStarted)
+			reportStep(options.Progress, "Docker Engine is ready through sudo.")
 			return report, nil
 		}
 	}
@@ -168,6 +173,7 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 	report.Ready = true
 	report.NeedsRelogin = true
 	report.Message = dockerPermissionMessage(true)
+	reportStep(options.Progress, "Docker Engine is ready through sudo.")
 	return report, nil
 }
 
@@ -191,10 +197,10 @@ func preflightSudo(ctx context.Context, runner CommandRunner) error {
 }
 
 func installDockerPackages(ctx context.Context, runner CommandRunner, options DockerBootstrapOptions, distro linuxDistribution, codename string) error {
-	if _, err := runSudo(ctx, runner, "apt-get", "update"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Refreshing apt metadata for Docker", "apt-get", "update"); err != nil {
 		return errors.New("Docker bootstrap could not refresh apt metadata; run sudo apt-get update and retry")
 	}
-	if _, err := runSudo(ctx, runner, "apt-get", "install", "-y", "ca-certificates"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing Docker package prerequisites", "apt-get", "install", "-y", "ca-certificates"); err != nil {
 		return errors.New("Docker bootstrap could not install ca-certificates; run sudo apt-get install ca-certificates and retry")
 	}
 
@@ -218,11 +224,11 @@ func installDockerPackages(ctx context.Context, runner CommandRunner, options Do
 		}
 	}
 	if options.Downloader == nil {
-		options.Downloader = httpFileDownloader{}
+		options.Downloader = httpFileDownloader{Progress: options.Progress}
 	}
 	platform := distro.ID
 	repository := "https://download.docker.com/linux/" + platform
-	if err := options.Downloader.Download(ctx, repository+"/gpg", keyPath); err != nil {
+	if err := downloadFile(ctx, options.Downloader, options.Progress, "Docker signing key", repository+"/gpg", keyPath); err != nil {
 		return errors.New("download the official Docker apt signing key after sudo preflight")
 	}
 	architecture := dockerRepositoryArchitecture(options.GOARCH)
@@ -238,31 +244,31 @@ func installDockerPackages(ctx context.Context, runner CommandRunner, options Do
 	if err := os.WriteFile(sourcePath, []byte(sources), 0o600); err != nil {
 		return fmt.Errorf("write user-owned Docker apt source: %w", err)
 	}
-	if _, err := runSudo(ctx, runner, "install", "-m", "0755", "-d", "/etc/apt/keyrings"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Preparing Docker apt keyring", "install", "-m", "0755", "-d", "/etc/apt/keyrings"); err != nil {
 		return errors.New("create Docker apt keyring directory")
 	}
 	if !keyExisted {
-		if _, err := runSudo(ctx, runner, "install", "-m", "0644", keyPath, aptKeyPath); err != nil {
+		if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing the Docker signing key", "install", "-m", "0644", keyPath, aptKeyPath); err != nil {
 			return errors.New("install the official Docker apt signing key")
 		}
 	}
 	if !sourceExisted {
-		if _, err := runSudo(ctx, runner, "install", "-m", "0644", sourcePath, aptSourcePath); err != nil {
+		if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing the Docker apt repository definition", "install", "-m", "0644", sourcePath, aptSourcePath); err != nil {
 			cleanup()
 			return errors.New("install the official Docker apt repository definition")
 		}
 	}
-	if _, err := runSudo(ctx, runner, "apt-get", "update"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Refreshing the Docker apt repository", "apt-get", "update"); err != nil {
 		cleanup()
 		return errors.New("Docker bootstrap could not refresh the official Docker apt repository")
 	}
 	packages := []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"}
 	args := append([]string{"apt-get", "install", "-y"}, packages...)
-	if _, err := runSudo(ctx, runner, args...); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing Docker Engine and Compose", args...); err != nil {
 		cleanup()
 		return errors.New("Docker Engine package installation failed; run sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin and retry")
 	}
-	if _, err := runSudo(ctx, runner, "systemctl", "enable", "--now", "docker"); err != nil {
+	if _, err := runSudoProgress(ctx, runner, options.Progress, "Starting Docker Engine", "systemctl", "enable", "--now", "docker"); err != nil {
 		cleanup()
 		return errors.New("Docker packages installed but the service could not start; run sudo systemctl enable --now docker and retry")
 	}
@@ -332,9 +338,45 @@ func firstNonEmptyLinux(values ...string) string {
 
 const maxHTTPDownloadBytes = 128 * 1024 * 1024
 
-type httpFileDownloader struct{}
+type httpFileDownloader struct {
+	Progress ProgressReporter
+}
 
-func (httpFileDownloader) Download(ctx context.Context, rawURL, destination string) error {
+type labeledFileDownloader interface {
+	DownloadWithProgress(context.Context, string, string, string) error
+}
+
+func reportStep(reporter ProgressReporter, label string) {
+	if reporter != nil {
+		reporter.Step(label)
+	}
+}
+
+func downloadFile(ctx context.Context, downloader FileDownloader, reporter ProgressReporter, label, rawURL, destination string) error {
+	reportStep(reporter, "Downloading "+label+"...")
+	var err error
+	if labeled, ok := downloader.(labeledFileDownloader); ok {
+		err = labeled.DownloadWithProgress(ctx, rawURL, destination, label)
+	} else {
+		err = downloader.Download(ctx, rawURL, destination)
+	}
+	if err != nil {
+		reportStep(reporter, "Downloading "+label+" failed.")
+		return err
+	}
+	reportStep(reporter, label+" downloaded.")
+	return nil
+}
+
+func (d httpFileDownloader) Download(ctx context.Context, rawURL, destination string) error {
+	return d.download(ctx, rawURL, destination, "download")
+}
+
+func (d httpFileDownloader) DownloadWithProgress(ctx context.Context, rawURL, destination, label string) error {
+	return d.download(ctx, rawURL, destination, label)
+}
+
+func (d httpFileDownloader) download(ctx context.Context, rawURL, destination, label string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return err
@@ -352,7 +394,8 @@ func (httpFileDownloader) Download(ctx context.Context, rawURL, destination stri
 	if err != nil {
 		return err
 	}
-	written, copyErr := io.Copy(file, io.LimitReader(response.Body, maxHTTPDownloadBytes+1))
+	reader := NewProgressReader(response.Body, d.Progress, label, response.ContentLength)
+	written, copyErr := io.Copy(file, io.LimitReader(reader, maxHTTPDownloadBytes+1))
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if copyErr != nil {

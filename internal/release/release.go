@@ -39,6 +39,7 @@ type Client struct {
 	GOOS          string
 	GOARCH        string
 	AllowInsecure bool
+	Progress      install.ProgressReporter
 }
 
 type Report struct {
@@ -69,6 +70,7 @@ type releaseManifest struct {
 // verified. The target is not mutated until manifest, checksum, and binary
 // launch validation all succeed.
 func (c Client) InstallLatest(ctx context.Context, target, currentVersion string, force bool) (Report, error) {
+	c.step("Checking latest Baron release...")
 	if target == "" {
 		return Report{}, errors.New("Baron install target is required")
 	}
@@ -85,6 +87,7 @@ func (c Client) InstallLatest(ctx context.Context, target, currentVersion string
 		return Report{}, err
 	}
 	if !force && strings.TrimSpace(currentVersion) == tagVersion {
+		c.step("Baron is already up to date.")
 		return Report{Version: tagVersion, Target: target, Changed: false}, nil
 	}
 
@@ -107,7 +110,7 @@ func (c Client) InstallLatest(ctx context.Context, target, currentVersion string
 		return Report{}, fmt.Errorf("Baron release has no compatible asset %q", assetName)
 	}
 
-	manifestData, err := c.download(ctx, manifestURL, maxMetadataBytes)
+	manifestData, err := c.download(ctx, manifestURL, maxMetadataBytes, "Baron release manifest")
 	if err != nil {
 		return Report{}, fmt.Errorf("download Baron release manifest: %w", err)
 	}
@@ -126,7 +129,7 @@ func (c Client) InstallLatest(ctx context.Context, target, currentVersion string
 		return Report{}, fmt.Errorf("Baron release manifest does not list %s", assetName)
 	}
 
-	sumsData, err := c.download(ctx, sumsURL, maxChecksumBytes)
+	sumsData, err := c.download(ctx, sumsURL, maxChecksumBytes, "Baron release checksums")
 	if err != nil {
 		return Report{}, fmt.Errorf("download Baron release checksums: %w", err)
 	}
@@ -134,7 +137,7 @@ func (c Client) InstallLatest(ctx context.Context, target, currentVersion string
 	if err != nil {
 		return Report{}, err
 	}
-	binaryData, err := c.download(ctx, binaryURL, maxBinaryBytes)
+	binaryData, err := c.download(ctx, binaryURL, maxBinaryBytes, "Baron release binary")
 	if err != nil {
 		return Report{}, fmt.Errorf("download Baron release binary: %w", err)
 	}
@@ -176,6 +179,7 @@ func (c Client) InstallLatest(ctx context.Context, target, currentVersion string
 	if err := validateBinary(ctx, tempPath, tagVersion); err != nil {
 		return Report{}, fmt.Errorf("validate Baron release binary: %w", err)
 	}
+	c.step("Installing verified Baron binary...")
 	if c.isWindows() {
 		stagedPath := target + ".baron-update-" + tagVersion + ".exe"
 		if err := os.Rename(tempPath, stagedPath); err != nil {
@@ -193,6 +197,7 @@ func (c Client) InstallLatest(ctx context.Context, target, currentVersion string
 	}
 	cleanup = false
 	_ = os.Remove(tempPath)
+	c.step("Verified Baron binary installed.")
 	return Report{Version: tagVersion, Target: target, Changed: true, Rollback: backup}, nil
 }
 
@@ -206,7 +211,7 @@ func (c Client) latest(ctx context.Context) (githubRelease, error) {
 		return githubRelease{}, err
 	}
 	endpoint := strings.TrimRight(base, "/") + "/repos/" + repository + "/releases/latest"
-	data, err := c.download(ctx, endpoint, maxMetadataBytes)
+	data, err := c.download(ctx, endpoint, maxMetadataBytes, "latest Baron release metadata")
 	if err != nil {
 		return githubRelease{}, fmt.Errorf("read latest Baron release: %w", err)
 	}
@@ -220,7 +225,8 @@ func (c Client) latest(ctx context.Context) (githubRelease, error) {
 	return release, nil
 }
 
-func (c Client) download(ctx context.Context, rawURL string, maxBytes int64) ([]byte, error) {
+func (c Client) download(ctx context.Context, rawURL string, maxBytes int64, label string) ([]byte, error) {
+	c.step("Downloading " + label + "...")
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return nil, errors.New("Baron release URL is invalid")
@@ -249,14 +255,22 @@ func (c Client) download(ctx context.Context, rawURL string, maxBytes int64) ([]
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("Baron release download returned HTTP %d", resp.StatusCode)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	reader := install.NewProgressReader(resp.Body, c.Progress, label, resp.ContentLength)
+	data, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
 	if err != nil {
 		return nil, err
 	}
 	if int64(len(data)) > maxBytes {
 		return nil, errors.New("Baron release response exceeds the safety limit")
 	}
+	c.step(label + " downloaded.")
 	return data, nil
+}
+
+func (c Client) step(label string) {
+	if c.Progress != nil {
+		c.Progress.Step(label)
+	}
 }
 
 func (c Client) assetName() (string, error) {

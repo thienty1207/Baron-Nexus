@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -84,6 +85,27 @@ func TestHTTPFileDownloaderDoesNotTruncateReleaseArchive(t *testing.T) {
 	}
 	if !bytes.Equal(got, payload) {
 		t.Fatalf("downloaded archive size=%d, want %d", len(got), len(payload))
+	}
+}
+
+func TestHTTPFileDownloaderReportsDownloadProgress(t *testing.T) {
+	payload := bytes.Repeat([]byte("uv"), 2*1024*1024)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Length", fmt.Sprintf("%d", len(payload)))
+		if _, err := writer.Write(payload); err != nil {
+			t.Errorf("write test payload: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	var output bytes.Buffer
+	destination := filepath.Join(t.TempDir(), "uv.tar.gz")
+	downloader := httpFileDownloader{Progress: NewProgressReporter(&output)}
+	if err := downloader.DownloadWithProgress(context.Background(), server.URL+"/uv.tar.gz", destination, "uv archive"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "uv archive") || !strings.Contains(output.String(), "100%") {
+		t.Fatalf("download progress was not reported:\n%s", output.String())
 	}
 }
 
