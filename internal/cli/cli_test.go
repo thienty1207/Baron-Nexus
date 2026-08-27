@@ -56,31 +56,53 @@ func TestInitUsesConfiguredLoadingRunner(t *testing.T) {
 	}
 }
 
-func TestUninstallRequiresExactConfirmation(t *testing.T) {
-	var out bytes.Buffer
-	called := false
-	code := Run([]string{"uninstall"}, Options{
-		In:            strings.NewReader("UNINSTALL BARON\nextra\n"),
-		Out:           &out,
-		Err:           &out,
-		UninstallPlan: func(bool) (string, error) { return "Would remove Baron resources.", nil },
-		Uninstall:     func(bool) (string, error) { called = true; return "removed", nil },
-	})
-	if code != ExitSuccess || !called || !strings.Contains(out.String(), "removed") {
-		t.Fatalf("confirmed uninstall code=%d called=%v output=%s", code, called, out.String())
+func TestUninstallConfirmationAcceptsYOrEmptyAndRejectsOtherAnswers(t *testing.T) {
+	for _, input := range []string{"", "\n", "y\n", "Y\n"} {
+		var out bytes.Buffer
+		called := false
+		code := Run([]string{"uninstall"}, Options{
+			In:            strings.NewReader(input),
+			Out:           &out,
+			Err:           &out,
+			UninstallPlan: func(bool) (string, error) { return "Would remove Baron resources.", nil },
+			Uninstall:     func(bool) (string, error) { called = true; return "removed", nil },
+		})
+		if code != ExitSuccess || !called || !strings.Contains(out.String(), "removed") {
+			t.Fatalf("accepted uninstall input=%q code=%d called=%v output=%s", input, code, called, out.String())
+		}
+		if !strings.Contains(out.String(), "Continue uninstall? [Y/n]:") {
+			t.Fatalf("uninstall prompt missing for input=%q: %s", input, out.String())
+		}
 	}
 
-	out.Reset()
-	called = false
-	code = Run([]string{"uninstall"}, Options{
-		In:            strings.NewReader("cancel\n"),
-		Out:           &out,
-		Err:           &out,
-		UninstallPlan: func(bool) (string, error) { return "Would remove Baron resources.", nil },
-		Uninstall:     func(bool) (string, error) { called = true; return "removed", nil },
-	})
-	if code != ExitUsage || called || !strings.Contains(out.String(), "UNINSTALL BARON") {
-		t.Fatalf("unconfirmed uninstall code=%d called=%v output=%s", code, called, out.String())
+	for _, input := range []string{"n\n", "N\n"} {
+		var out bytes.Buffer
+		called := false
+		code := Run([]string{"uninstall"}, Options{
+			In:            strings.NewReader(input),
+			Out:           &out,
+			Err:           &out,
+			UninstallPlan: func(bool) (string, error) { return "Would remove Baron resources.", nil },
+			Uninstall:     func(bool) (string, error) { called = true; return "removed", nil },
+		})
+		if code != ExitSuccess || called || !strings.Contains(out.String(), "cancelled") {
+			t.Fatalf("cancelled uninstall input=%q code=%d called=%v output=%s", input, code, called, out.String())
+		}
+	}
+
+	for _, input := range []string{"UNINSTALL BARON\n", "yes\n", "cancel\n"} {
+		var out bytes.Buffer
+		called := false
+		code := Run([]string{"uninstall"}, Options{
+			In:            strings.NewReader(input),
+			Out:           &out,
+			Err:           &out,
+			UninstallPlan: func(bool) (string, error) { return "Would remove Baron resources.", nil },
+			Uninstall:     func(bool) (string, error) { called = true; return "removed", nil },
+		})
+		if code != ExitUsage || called {
+			t.Fatalf("invalid uninstall input=%q code=%d called=%v output=%s", input, code, called, out.String())
+		}
 	}
 }
 
@@ -104,19 +126,19 @@ func TestPermissionsCommandsInvokeDedicatedHandlers(t *testing.T) {
 
 func TestVersionFlagUsesBaronFormat(t *testing.T) {
 	var out bytes.Buffer
-	cmd := New(Options{Version: "0.1.7", Out: &out, Err: &out})
+	cmd := New(Options{Version: "0.1.8", Out: &out, Err: &out})
 	cmd.SetArgs([]string{"--version"})
 	if err := cmd.Execute(); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(out.String()); got != "baron 0.1.7" {
+	if got := strings.TrimSpace(out.String()); got != "baron 0.1.8" {
 		t.Fatalf("version output=%q", got)
 	}
 }
 
-func TestDefaultVersionIsBaron017(t *testing.T) {
-	if version.Value != "0.1.7" {
-		t.Fatalf("default version=%q, want 0.1.7", version.Value)
+func TestDefaultVersionIsBaron018(t *testing.T) {
+	if version.Value != "0.1.8" {
+		t.Fatalf("default version=%q, want 0.1.8", version.Value)
 	}
 }
 
@@ -124,7 +146,7 @@ func TestInstallAndUpdateCommandsInvokeDedicatedHandlers(t *testing.T) {
 	var out bytes.Buffer
 	installCalled, updateCalled := false, false
 	options := Options{
-		Version: "0.1.7", Out: &out, Err: &out,
+		Version: "0.1.8", Out: &out, Err: &out,
 		Install: func() (string, error) { installCalled = true; return "install ok", nil },
 		Update:  func() (string, error) { updateCalled = true; return "update ok", nil },
 	}

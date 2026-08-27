@@ -71,6 +71,17 @@ func TestLoadingUIUsesSpinnerAndReportsFailureOnInteractiveOutput(t *testing.T) 
 	}
 }
 
+func TestLoadingUILeavesVisibleStartLineForFastInteractiveOperations(t *testing.T) {
+	var output bytes.Buffer
+	ui := newProgressUI(&output, true)
+	if err := ui.Run("Updating Baron", func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := output.String(); !strings.Contains(got, "[Baron] Updating Baron...\n") {
+		t.Fatalf("fast interactive operation did not leave a visible start line:\n%q", got)
+	}
+}
+
 type finalChunkReader struct {
 	data []byte
 	done bool

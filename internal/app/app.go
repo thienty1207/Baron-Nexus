@@ -651,13 +651,83 @@ func (a *App) permissionDirectory() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	global, err := config.LoadGlobalState(path)
+	if err != nil {
+		return "", err
+	}
+	if recorded := strings.TrimSpace(global.PermissionDirectory); recorded != "" {
+		if err := permissions.ValidateDirectory(recorded); err != nil {
+			return "", err
+		}
+		return filepath.Clean(recorded), nil
+	}
+	for _, candidate := range a.permissionPathCandidates() {
+		if permissions.DirectoryOnPath(candidate) && permissions.DirectoryIsWritable(candidate) {
+			return filepath.Clean(candidate), nil
+		}
+	}
 	return permissions.DefaultDirectory(path)
+}
+
+func (a *App) permissionPathCandidates() []string {
+	candidates := make([]string, 0, 1)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || !filepath.IsAbs(value) {
+			return
+		}
+		value = filepath.Clean(value)
+		for _, existing := range candidates {
+			if sameAppPath(existing, value) {
+				return
+			}
+		}
+		candidates = append(candidates, value)
+	}
+	if executable := a.executablePathForPermissions(); executable != "" {
+		add(filepath.Dir(executable))
+	}
+	for _, entry := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
+		add(entry)
+	}
+	return candidates
+}
+
+func (a *App) executablePathForPermissions() string {
+	path := strings.TrimSpace(a.ExecutablePath)
+	if path == "" {
+		path, _ = release.CurrentExecutablePath()
+	}
+	if path == "" {
+		return ""
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	return absolute
+}
+
+func sameAppPath(left, right string) bool {
+	left, right = filepath.Clean(left), filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func (a *App) enablePermissions() (string, error) {
 	directory, err := a.permissionDirectory()
 	if err != nil {
 		return "", err
+	}
+	global, globalPath, err := a.loadGlobal()
+	if err != nil {
+		return "", err
+	}
+	global.PermissionDirectory = directory
+	if err := a.saveGlobal(globalPath, global); err != nil {
+		return "", fmt.Errorf("record permission launcher directory: %w", err)
 	}
 	status, err := permissions.Enable(directory)
 	if err != nil {
@@ -725,7 +795,7 @@ func (a *App) uninstallOptions(purgeShared bool) (baronuninstall.Options, error)
 			return baronuninstall.Options{}, err
 		}
 	}
-	permissionDirectory, err := permissions.DefaultDirectory(globalPath)
+	permissionDirectory, err := a.permissionDirectory()
 	if err != nil {
 		return baronuninstall.Options{}, err
 	}

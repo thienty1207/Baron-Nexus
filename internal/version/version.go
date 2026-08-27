@@ -2,5 +2,5 @@
 package version
 
 // Value is overridden by the release build with Go -ldflags -X. Keeping a
-// usable default makes source-built binaries self-describing as 0.1.7.
-var Value = "0.1.7"
+// usable default makes source-built binaries self-describing as 0.1.8.
+var Value = "0.1.8"

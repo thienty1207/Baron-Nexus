@@ -83,3 +83,14 @@ func TestDisableRemovesOnlyBaronLaunchers(t *testing.T) {
 		t.Fatalf("unrelated file was removed: %v", err)
 	}
 }
+
+func TestDirectoryOnPathMatchesAnExistingPATHEntry(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator))
+	if !DirectoryOnPath(directory) {
+		t.Fatalf("PATH did not contain %s", directory)
+	}
+}

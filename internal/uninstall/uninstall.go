@@ -106,8 +106,8 @@ func BuildPlan(options Options) (Plan, error) {
 		add(path)
 	}
 	if options.PermissionsDirectory != "" {
-		if !pathWithin(globalDir, options.PermissionsDirectory) {
-			return Plan{}, fmt.Errorf("refusing to remove permission launcher outside global config: %s", options.PermissionsDirectory)
+		if err := permissions.ValidateDirectory(options.PermissionsDirectory); err != nil {
+			return Plan{}, fmt.Errorf("refusing to remove permission launcher directory: %w", err)
 		}
 		paths := permissions.Paths(options.PermissionsDirectory)
 		add(paths.DSH)

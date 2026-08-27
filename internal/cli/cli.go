@@ -356,7 +356,23 @@ func permissionsCommand(options Options) *cobra.Command {
 	return parent
 }
 
-const uninstallConfirmation = "UNINSTALL BARON"
+func confirmUninstall(in io.Reader, out io.Writer) (bool, error) {
+	if out != nil {
+		_, _ = fmt.Fprint(out, "Continue uninstall? [Y/n]: ")
+	}
+	line, err := bufio.NewReader(in).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return false, fmt.Errorf("read uninstall confirmation: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "", "y":
+		return true, nil
+	case "n":
+		return false, nil
+	default:
+		return false, errors.New("uninstall cancelled; enter y or n")
+	}
+}
 
 func uninstallCommand(options Options) *cobra.Command {
 	var yes, purgeShared bool
@@ -380,13 +396,13 @@ func uninstallCommand(options Options) *cobra.Command {
 				if strings.TrimSpace(plan) != "" {
 					_, _ = fmt.Fprintln(cmd.OutOrStdout(), plan)
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Type %q to continue: ", uninstallConfirmation)
-				line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
-				if err != nil && !errors.Is(err, io.EOF) {
-					return fmt.Errorf("read uninstall confirmation: %w", err)
+				confirmed, err := confirmUninstall(cmd.InOrStdin(), cmd.OutOrStdout())
+				if err != nil {
+					return err
 				}
-				if strings.TrimSpace(line) != uninstallConfirmation {
-					return errors.New("uninstall cancelled; exact confirmation is required")
+				if !confirmed {
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Baron uninstall cancelled.")
+					return nil
 				}
 			}
 			message := ""

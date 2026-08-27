@@ -26,6 +26,7 @@ import (
 	"github.com/baron-shared-brain/baron/internal/credentials"
 	"github.com/baron-shared-brain/baron/internal/doctor"
 	"github.com/baron-shared-brain/baron/internal/install"
+	"github.com/baron-shared-brain/baron/internal/permissions"
 	"github.com/baron-shared-brain/baron/internal/project"
 	"github.com/baron-shared-brain/baron/internal/release"
 	"github.com/baron-shared-brain/baron/internal/storage"
@@ -43,6 +44,37 @@ func TestReleaseHTTPClientUsesArtifactTimeoutWithoutMutatingBase(t *testing.T) {
 	}
 	if base.Timeout != 3*time.Second {
 		t.Fatalf("base timeout=%s, want 3s", base.Timeout)
+	}
+}
+
+func TestEnablePermissionsUsesInstalledPathAlreadyOnPATH(t *testing.T) {
+	pathDirectory := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(pathDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", pathDirectory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	globalPath := filepath.Join(t.TempDir(), "config", "global.json")
+	application := New()
+	application.GlobalPath = globalPath
+	application.ExecutablePath = filepath.Join(pathDirectory, "baron")
+
+	message, err := application.enablePermissions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := permissions.Inspect(pathDirectory)
+	if status.Directory != pathDirectory || !status.DSHEnabled || !status.CodexEnabled {
+		t.Fatalf("launchers were not installed beside the PATH binary: %#v", status)
+	}
+	if strings.Contains(message, "export PATH") || strings.Contains(message, "adding this directory to PATH") {
+		t.Fatalf("PATH setup was still delegated to the user: %s", message)
+	}
+	data, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "permission_directory") {
+		t.Fatalf("permission directory was not recorded: %s", data)
 	}
 }
 
@@ -433,12 +465,14 @@ func TestUninstallOptionsPreferRecordedCustomToolHomes(t *testing.T) {
 	root := t.TempDir()
 	dshHome := filepath.Join(root, "custom-dsh")
 	codexHome := filepath.Join(root, "custom-codex")
+	permissionDirectory := filepath.Join(root, "path-bin")
 	globalPath := filepath.Join(root, "global.json")
 	if err := config.SaveGlobalState(globalPath, config.GlobalState{
 		DSHHomePath:         dshHome,
 		DSHProfilePatchPath: filepath.Join(dshHome, "profiles", "web", "cordis.patch.yml"),
 		CodexHomePath:       codexHome,
 		CodexHooksPath:      filepath.Join(codexHome, "hooks.json"),
+		PermissionDirectory: permissionDirectory,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -456,6 +490,9 @@ func TestUninstallOptionsPreferRecordedCustomToolHomes(t *testing.T) {
 	}
 	if options.CodexHome != codexHome || options.CodexHooksPath != filepath.Join(codexHome, "hooks.json") {
 		t.Fatalf("recorded Codex home was ignored: %#v", options)
+	}
+	if options.PermissionsDirectory != permissionDirectory {
+		t.Fatalf("recorded permission directory was ignored: %#v", options)
 	}
 	for _, path := range options.DSHProfilePatchPaths {
 		if !strings.HasPrefix(path, dshHome+string(filepath.Separator)) {
@@ -476,15 +513,15 @@ func TestCLIOptionsUpdateUsesVerifiedReleaseWithoutProjectState(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old Baron binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	candidate := []byte("#!/bin/sh\necho 'baron 0.1.8'\n")
-	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.8","artifacts":["baron-linux-amd64"]}`)
+	candidate := []byte("#!/bin/sh\necho 'baron 0.1.9'\n")
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.9","artifacts":["baron-linux-amd64"]}`)
 	sum := sha256.Sum256(candidate)
 	sums := []byte(fmt.Sprintf("%s  baron-linux-amd64\n", hex.EncodeToString(sum[:])))
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/repos/owner/repo/releases/latest":
 			_ = json.NewEncoder(writer).Encode(map[string]any{
-				"tag_name": "v0.1.8",
+				"tag_name": "v0.1.9",
 				"assets": []map[string]string{
 					{"name": "baron-linux-amd64", "browser_download_url": "http://" + request.Host + "/download/baron-linux-amd64"},
 					{"name": "release-manifest.json", "browser_download_url": "http://" + request.Host + "/download/release-manifest.json"},

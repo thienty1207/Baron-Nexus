@@ -57,6 +57,76 @@ func DefaultDirectory(globalPath string) (string, error) {
 	return filepath.Join(filepath.Dir(filepath.Clean(globalPath)), "bin"), nil
 }
 
+// ValidateDirectory permits a launcher directory without granting permission
+// to recursively remove or replace the directory itself. The launcher files
+// are the only paths this package ever writes or removes.
+func ValidateDirectory(directory string) error {
+	trimmed := strings.TrimSpace(directory)
+	if trimmed == "" || trimmed == "." {
+		return errors.New("permission launcher directory is required")
+	}
+	clean, err := filepath.Abs(trimmed)
+	if err != nil {
+		return fmt.Errorf("resolve permission launcher directory: %w", err)
+	}
+	root := filepath.VolumeName(clean) + string(filepath.Separator)
+	if clean == root {
+		return fmt.Errorf("refusing to use filesystem root as permission launcher directory: %s", directory)
+	}
+	if home, err := os.UserHomeDir(); err == nil && sameDirectory(clean, home) {
+		return fmt.Errorf("refusing to use the home directory as permission launcher directory: %s", directory)
+	}
+	if info, err := os.Lstat(clean); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("permission launcher directory is not safe: %s", directory)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// DirectoryOnPath reports whether the exact directory is available through
+// the current process PATH. Empty and relative PATH entries are ignored so a
+// launcher is never silently placed in the current working directory.
+func DirectoryOnPath(directory string) bool {
+	clean, err := absoluteDirectory(directory)
+	if err != nil {
+		return false
+	}
+	for _, entry := range strings.Split(os.Getenv("PATH"), string(os.PathListSeparator)) {
+		entry = strings.TrimSpace(entry)
+		if entry == "" || !filepath.IsAbs(entry) {
+			continue
+		}
+		candidate, candidateErr := absoluteDirectory(entry)
+		if candidateErr == nil && sameDirectory(clean, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+// DirectoryIsWritable probes the actual user permission instead of relying on
+// mode bits, which are not a reliable ACL signal on Windows.
+func DirectoryIsWritable(directory string) bool {
+	if err := ValidateDirectory(directory); err != nil {
+		return false
+	}
+	info, err := os.Stat(directory)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	temporary, err := os.CreateTemp(directory, ".baron-permission-check-*")
+	if err != nil {
+		return false
+	}
+	name := temporary.Name()
+	closeErr := temporary.Close()
+	removeErr := os.Remove(name)
+	return closeErr == nil && removeErr == nil
+}
+
 func Enable(directory string) (Status, error) {
 	paths := Paths(directory)
 	if err := ensureDirectory(paths.Directory); err != nil {
@@ -126,6 +196,9 @@ func Inspect(directory string) Status {
 
 func Instructions(directory string) string {
 	directory = filepath.Clean(directory)
+	if DirectoryOnPath(directory) {
+		return "Launchers are already on PATH. Run `dsh-auto` and `codex-auto`; no PATH export is required."
+	}
 	if runtime.GOOS == "windows" {
 		return fmt.Sprintf("Run `dsh-auto` and `codex-auto` after adding this directory to PATH:\n  PowerShell: $env:Path = %q + ';' + $env:Path\n  cmd.exe:     set PATH=%s;%%PATH%%", directory, directory)
 	}
@@ -133,9 +206,10 @@ func Instructions(directory string) string {
 }
 
 func ensureDirectory(directory string) error {
-	if directory == "" || directory == "." {
-		return errors.New("permission launcher directory is required")
+	if err := ValidateDirectory(directory); err != nil {
+		return err
 	}
+	directory = filepath.Clean(directory)
 	if info, err := os.Lstat(directory); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return fmt.Errorf("permission launcher directory is not safe: %s", directory)
@@ -185,6 +259,29 @@ func launcherWasCreatedByBaron(path string) (bool, error) {
 func launcherHasMarker(path string) bool {
 	owned, err := launcherWasCreatedByBaron(path)
 	return err == nil && owned
+}
+
+func absoluteDirectory(directory string) (string, error) {
+	trimmed := strings.TrimSpace(directory)
+	if trimmed == "" || !filepath.IsAbs(trimmed) {
+		return "", errors.New("permission launcher directory must be absolute")
+	}
+	clean, err := filepath.Abs(trimmed)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		clean = resolved
+	}
+	return filepath.Clean(clean), nil
+}
+
+func sameDirectory(left, right string) bool {
+	left, right = filepath.Clean(left), filepath.Clean(right)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func dshLauncher() string {

@@ -132,17 +132,20 @@ func (p *ProgressUI) Run(label string, action func() error) error {
 		return nil
 	}
 
-	// Run the operation separately so the spinner remains responsive while
-	// package managers or network calls block.
-	done := make(chan error, 1)
-	go func() { done <- action() }()
+	// Keep a durable start line so fast operations are visible even when the
+	// spinner is immediately replaced by its completion line.
 	frames := []string{"-", "\\", "|", "/"}
 	p.mu.Lock()
 	p.spinner = true
 	p.spinnerText = fmt.Sprintf("[Baron] %s %s", frames[0], label)
 	p.spinnerFrame = 0
+	_, _ = fmt.Fprintf(p.writer, "[Baron] %s...\n", label)
 	_, _ = fmt.Fprintf(p.writer, "\r%s", p.spinnerText)
 	p.mu.Unlock()
+	// Run the operation separately so the spinner remains responsive while
+	// package managers or network calls block.
+	done := make(chan error, 1)
+	go func() { done <- action() }()
 	ticker := time.NewTicker(120 * time.Millisecond)
 	defer ticker.Stop()
 	for {

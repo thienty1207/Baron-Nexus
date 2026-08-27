@@ -1,6 +1,6 @@
 # Baron Nexus
 
-Current release: `0.1.7` — adds loading feedback for initialization, explicit opt-in
+Current release: `0.1.8` — adds loading feedback for initialization, explicit opt-in
 auto-accept launchers, and a guarded uninstall while retaining the latest-at-run
 dependency refresh, concise DeepSeek key rotation, and automated
 Ubuntu/Debian first-install bootstrap.
@@ -32,7 +32,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.7`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.8`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
 latest Node/uv releases at run time, and refreshes Docker Engine/Compose,
@@ -61,7 +61,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.7`. The PowerShell installer resolves the
+The expected output is `baron 0.1.8`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
@@ -179,6 +179,19 @@ updating the DSH store and any existing Baron-managed Tencent runtime env:
 ```text
 baron deepseek api_key
 ```
+
+To opt into explicit no-prompt launchers for DSH and Codex, run:
+
+```text
+baron permissions enable
+```
+
+Baron places `dsh-auto` and `codex-auto` in the installed binary directory or
+another existing writable directory already present in `PATH`, so no `export`
+or profile edit is required in the normal install. Use `dsh-auto` and
+`codex-auto` explicitly when full access is intended; normal `dsh` and `codex`
+commands are never replaced. Run `baron permissions disable` to remove only
+these Baron-owned launchers.
 
 For automation or CI, provide the provider key through the environment instead
 of using the interactive prompt:

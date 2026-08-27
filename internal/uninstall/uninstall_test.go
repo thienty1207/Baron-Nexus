@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/baron-shared-brain/baron/internal/install"
+	"github.com/baron-shared-brain/baron/internal/permissions"
 )
 
 type uninstallRunner struct {
@@ -221,6 +222,53 @@ func TestBuildPlanRejectsSharedHomeOverlappingBaronConfig(t *testing.T) {
 		PurgeShared: true,
 	}); err == nil {
 		t.Fatal("shared home overlapping Baron config was accepted")
+	}
+}
+
+func TestBuildPlanAllowsExternalPermissionLauncherDirectory(t *testing.T) {
+	root := t.TempDir()
+	permissionDirectory := filepath.Join(root, "path-bin")
+	plan, err := BuildPlan(Options{
+		GlobalPath:           filepath.Join(root, "config", "global.json"),
+		PermissionsDirectory: permissionDirectory,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := permissions.Paths(permissionDirectory)
+	for _, want := range []string{paths.DSH, paths.Codex} {
+		found := false
+		for _, resource := range plan.Resources {
+			if samePath(resource, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("permission launcher missing from plan: %s in %#v", want, plan.Resources)
+		}
+	}
+}
+
+func TestExecuteRemovesExternalBaronPermissionLaunchers(t *testing.T) {
+	root := t.TempDir()
+	globalPath := filepath.Join(root, "config", "global.json")
+	permissionDirectory := filepath.Join(root, "path-bin")
+	if _, err := permissions.Enable(permissionDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Execute(context.Background(), Options{
+		GlobalPath:           globalPath,
+		PermissionsDirectory: permissionDirectory,
+		Runner:               &uninstallRunner{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	paths := permissions.Paths(permissionDirectory)
+	for _, path := range []string{paths.DSH, paths.Codex} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("permission launcher remains after uninstall: %s (%v)", path, err)
+		}
 	}
 }
 

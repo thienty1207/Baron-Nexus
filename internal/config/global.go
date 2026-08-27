@@ -22,6 +22,7 @@ type GlobalState struct {
 	CodexHomePath       string                              `json:"codex_home_path,omitempty"`
 	CodexAdapterPath    string                              `json:"codex_adapter_path,omitempty"`
 	CodexHooksInstalled bool                                `json:"codex_hooks_installed"`
+	PermissionDirectory string                              `json:"permission_directory,omitempty"`
 	TencentInstallPath  string                              `json:"tencent_install_path,omitempty"`
 	ProjectBindings     map[string]contracts.ProjectBinding `json:"project_bindings,omitempty"`
 	ProjectRoots        map[string]string                   `json:"project_roots,omitempty"`
