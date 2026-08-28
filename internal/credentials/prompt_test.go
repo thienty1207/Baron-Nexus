@@ -52,6 +52,28 @@ func TestVisibleSecretUsesOrdinaryLineInputAndWarnsAboutEcho(t *testing.T) {
 	}
 }
 
+func TestPromptCallsBeforeInputBeforeWritingLabel(t *testing.T) {
+	var output bytes.Buffer
+	called := false
+	prompter := &Prompter{
+		Out: &output,
+		BeforeInput: func() {
+			called = true
+			_, _ = output.WriteString("boundary")
+		},
+		ReadLine: func(io.Reader) (string, error) { return "provider-key", nil },
+	}
+	if _, err := prompter.VisibleSecret("DeepSeek API key"); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("prompt did not notify the loading UI before reading input")
+	}
+	if got := output.String(); !strings.HasPrefix(got, "boundaryDeepSeek API key") {
+		t.Fatalf("prompt was written before the input boundary: %q", got)
+	}
+}
+
 func TestValueUsesInjectedLineReaderAndDefault(t *testing.T) {
 	var output bytes.Buffer
 	prompter := &Prompter{

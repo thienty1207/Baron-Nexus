@@ -36,6 +36,9 @@ type Prompter struct {
 	Out        io.Writer
 	ReadSecret SecretReader
 	ReadLine   LineReader
+	// BeforeInput lets callers stop transient terminal rendering before the
+	// prompt label is written.
+	BeforeInput func()
 
 	lineReader *bufio.Reader
 }
@@ -44,6 +47,7 @@ type Prompter struct {
 // value is never written by this package.
 func (p *Prompter) Secret(label string) (string, error) {
 	in, out := p.io()
+	p.prepareForInput()
 	if err := p.writePrompt(out, label, ""); err != nil {
 		return "", err
 	}
@@ -79,6 +83,7 @@ func (p *Prompter) Secret(label string) (string, error) {
 // tests and non-terminal callers.
 func (p *Prompter) VisibleSecret(label string) (string, error) {
 	in, out := p.io()
+	p.prepareForInput()
 	if err := p.writePrompt(out, label+" (input will be visible)", ""); err != nil {
 		return "", err
 	}
@@ -118,6 +123,7 @@ func (p *Prompter) VisibleSecret(label string) (string, error) {
 // supplied default when one is present.
 func (p *Prompter) Value(label, defaultValue string) (string, error) {
 	in, out := p.io()
+	p.prepareForInput()
 	if err := p.writePrompt(out, label, defaultValue); err != nil {
 		return "", err
 	}
@@ -146,6 +152,12 @@ func (p *Prompter) Value(label, defaultValue string) (string, error) {
 		return "", ErrEmptyValue
 	}
 	return value, nil
+}
+
+func (p *Prompter) prepareForInput() {
+	if p.BeforeInput != nil {
+		p.BeforeInput()
+	}
 }
 
 func (p *Prompter) io() (io.Reader, io.Writer) {

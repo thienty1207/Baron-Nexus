@@ -1,6 +1,6 @@
 # Baron Nexus
 
-Current release: `0.1.9` — adds loading feedback for initialization, explicit opt-in
+Current release: `0.1.10` — adds loading feedback for initialization, explicit opt-in
 auto-accept launchers, and a path-checked full uninstall while retaining the latest-at-run
 dependency refresh, concise DeepSeek key rotation, and automated
 Ubuntu/Debian first-install bootstrap.
@@ -32,7 +32,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.9`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.10`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
 latest Node/uv releases at run time, and checks Docker Engine/Compose,
@@ -63,7 +63,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.9`. The PowerShell installer resolves the
+The expected output is `baron 0.1.10`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.

@@ -173,6 +173,21 @@ func (p *ProgressUI) Run(label string, action func() error) error {
 	}
 }
 
+// PrepareForInput clears the live spinner and leaves the cursor at the start
+// of its line before an interactive prompt writes to the terminal.
+func (p *ProgressUI) PrepareForInput() {
+	if p == nil || !p.interactive {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.spinner || p.spinnerText == "" {
+		return
+	}
+	p.clearSpinnerLocked()
+	p.spinner = false
+}
+
 func (p *ProgressUI) clearSpinnerLocked() {
 	if !p.spinner || p.spinnerText == "" {
 		return

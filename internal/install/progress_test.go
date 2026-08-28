@@ -3,6 +3,7 @@ package install
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -79,6 +80,30 @@ func TestLoadingUILeavesVisibleStartLineForFastInteractiveOperations(t *testing.
 	}
 	if got := output.String(); !strings.Contains(got, "[Baron] Updating Baron...\n") {
 		t.Fatalf("fast interactive operation did not leave a visible start line:\n%q", got)
+	}
+}
+
+func TestLoadingUIPreparesFreshLineForInteractiveInput(t *testing.T) {
+	var output bytes.Buffer
+	ui := newProgressUI(&output, true)
+	if err := ui.Run("Running Baron install", func() error {
+		ui.PrepareForInput()
+		_, _ = fmt.Fprint(&output, "DeepSeek API key: ")
+		time.Sleep(250 * time.Millisecond)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := output.String()
+	if strings.Contains(got, "installDeepSeek API key") {
+		t.Fatalf("interactive prompt was appended to the spinner line:\n%q", got)
+	}
+	if !strings.Contains(got, "\rDeepSeek API key: ") {
+		t.Fatalf("interactive prompt did not start at a fresh cursor position:\n%q", got)
+	}
+	if gotCount := strings.Count(got, "DeepSeek API key: "); gotCount != 1 {
+		t.Fatalf("spinner continued writing while input was active (%d prompt labels):\n%q", gotCount, got)
 	}
 }
 

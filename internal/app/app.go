@@ -41,12 +41,13 @@ type App struct {
 	// TencentRestore is an injectable restore boundary for acceptance fixtures.
 	// The default path performs the real Docker/service/identity verification;
 	// tests may replace it to prove staging order without contacting Tencent.
-	TencentRestore TencentRestoreFunc
-	CommandRunner  install.CommandRunner
-	Input          io.Reader
-	PromptOutput   io.Writer
-	ReadSecret     credentials.SecretReader
-	ReadLine       credentials.LineReader
+	TencentRestore  TencentRestoreFunc
+	CommandRunner   install.CommandRunner
+	Input           io.Reader
+	PromptOutput    io.Writer
+	ReadSecret      credentials.SecretReader
+	ReadLine        credentials.LineReader
+	prepareForInput func()
 	// ValidateProviderCredential is injectable for deterministic tests. A nil
 	// value uses the live OpenAI-compatible /models validator.
 	ValidateProviderCredential func(context.Context, string, string) error
@@ -56,6 +57,10 @@ type App struct {
 
 func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 	ui := install.NewProgressUI(out)
+	a.prepareForInput = nil
+	if ui != nil {
+		a.prepareForInput = ui.PrepareForInput
+	}
 	var progress install.ProgressReporter
 	if ui != nil {
 		progress = ui
@@ -1638,7 +1643,7 @@ func (a *App) resolveTencentAdminKey(deploymentRoot string) (string, error) {
 }
 
 func (a *App) prompter() *credentials.Prompter {
-	return &credentials.Prompter{In: a.Input, Out: a.PromptOutput, ReadSecret: a.ReadSecret, ReadLine: a.ReadLine}
+	return &credentials.Prompter{In: a.Input, Out: a.PromptOutput, ReadSecret: a.ReadSecret, ReadLine: a.ReadLine, BeforeInput: a.prepareForInput}
 }
 
 func (a *App) validateProviderCredential(ctx context.Context, baseURL, key string) error {

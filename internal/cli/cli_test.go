@@ -151,9 +151,9 @@ func TestVersionFlagUsesBaronFormat(t *testing.T) {
 	}
 }
 
-func TestDefaultVersionIsBaron019(t *testing.T) {
-	if version.Value != "0.1.9" {
-		t.Fatalf("default version=%q, want 0.1.9", version.Value)
+func TestDefaultVersionIsBaron010(t *testing.T) {
+	if version.Value != "0.1.10" {
+		t.Fatalf("default version=%q, want 0.1.10", version.Value)
 	}
 }
 
