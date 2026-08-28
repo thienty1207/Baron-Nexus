@@ -159,6 +159,9 @@ func Setup(ctx context.Context, path string, options SetupOptions) (Project, err
 	if err := mergeGitignore(root); err != nil {
 		return Project{}, err
 	}
+	if err := ensureManagedAgents(root); err != nil {
+		return Project{}, fmt.Errorf("initialize managed AGENTS.md: %w", err)
+	}
 	stateStore, err := storage.Open(filepath.Join(baronDir, "runtime", "state.db"))
 	if err != nil {
 		return Project{}, fmt.Errorf("initialize local Baron state: %w", err)

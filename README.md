@@ -1,8 +1,9 @@
 # Baron Nexus
 
-Current release: `0.1.13` — fixes full Ubuntu/WSL uninstall cleanup for Docker volume
-and network removal, recreated npm caches, Codex launchers, and Baron update backups.
-It also keeps the DSH `0.1.1-rc.2` profile verification fix, idempotent
+Current release: `0.1.14` — installs a managed project `AGENTS.md` contract.
+It also includes full Ubuntu/WSL uninstall cleanup for Docker volume and network
+removal, recreated npm caches, Codex launchers, and Baron update backups. It keeps
+the DSH `0.1.1-rc.2` profile verification fix, idempotent
 initialization, latest-at-run dependency refresh, loading feedback, explicit opt-in
 auto-accept launchers, path-checked full uninstall, concise DeepSeek key rotation,
 and automated Ubuntu/Debian first-install bootstrap.
@@ -34,7 +35,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.13`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.14`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
 latest Node/uv releases at run time, and checks Docker Engine/Compose,
@@ -65,7 +66,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.13`. The PowerShell installer resolves the
+The expected output is `baron 0.1.14`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
@@ -272,6 +273,10 @@ explicit adapter process. It forwards lifecycle payloads to Baron and never
 owns Codex skills, provider settings, or authentication.
 
 ## Project files
+
+`AGENTS.md` is a Baron-managed project contract. `baron setup` creates it when
+missing and updates only the marked Baron block, preserving project-specific
+instructions outside that block. It contains no credentials or runtime secrets.
 
 `.baron/project.toml` is the commit-safe stable project identity.
 `.baron/.env` contains project-local Tencent runtime values, is Git-ignored,
