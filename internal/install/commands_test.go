@@ -558,6 +558,40 @@ func TestInstallDSHPluginsAddsOnlyMissingProfileEntries(t *testing.T) {
 	}
 }
 
+func TestInstallDSHPluginsAcceptsMCPClientDependencyWithoutBundleMarker(t *testing.T) {
+	fixture := &profilePluginFixture{
+		dumps: map[string]string{
+			"web":      "",
+			"headless": "",
+		},
+		omitMCPMarker: true,
+	}
+	if _, err := InstallDSHPluginsWithReport(context.Background(), fixture, ""); err != nil {
+		t.Fatalf("dependency-only MCP client was rejected: %v", err)
+	}
+	if len(fixture.adds) != 6 {
+		t.Fatalf("expected all three dependencies in both profiles, got %#v", fixture.adds)
+	}
+}
+
+func TestInstallDSHPluginsReusesMCPClientDependencyFromProfileList(t *testing.T) {
+	fixture := &profilePluginFixture{
+		dumps: map[string]string{
+			"web":      "superpowers-dsh\ndsh-reverse-skill\n",
+			"headless": "superpowers-dsh\ndsh-reverse-skill\n",
+		},
+		dependencies: map[string]string{
+			"web":      "0.1.1-rc.2",
+			"headless": "0.1.1-rc.2",
+		},
+	}
+	if report, err := InstallDSHPluginsWithReport(context.Background(), fixture, ""); err != nil {
+		t.Fatal(err)
+	} else if report.Changed || len(fixture.adds) != 0 {
+		t.Fatalf("installed MCP dependency was reinstalled: report=%#v adds=%#v", report, fixture.adds)
+	}
+}
+
 func TestInstallDSHPluginsUpdatesVersionedManagedNPMPlugin(t *testing.T) {
 	fixture := &versionedProfilePluginFixture{
 		dumps: map[string]string{
@@ -576,8 +610,10 @@ func TestInstallDSHPluginsUpdatesVersionedManagedNPMPlugin(t *testing.T) {
 }
 
 type profilePluginFixture struct {
-	dumps map[string]string
-	adds  []string
+	dumps         map[string]string
+	adds          []string
+	dependencies  map[string]string
+	omitMCPMarker bool
 }
 
 type versionedProfilePluginFixture struct {
@@ -632,6 +668,13 @@ func (f *profilePluginFixture) Run(_ context.Context, name string, args ...strin
 	if len(args) == 3 && args[0] == "--profile" && args[2] == "--dump-config" {
 		return f.dumps[args[1]], nil
 	}
+	if len(args) == 7 && args[0] == "plugin" && args[1] == "--profile" && args[3] == "list" {
+		version := f.dependencies[args[2]]
+		if version == "" {
+			return "[{\"dependencies\":{}}]", nil
+		}
+		return "[{\"dependencies\":{\"@deepseek-ai/dsh-mcp-client\":{\"version\":\"" + version + "\"}}}]", nil
+	}
 	if len(args) == 5 && args[0] == "plugin" && args[1] == "--profile" && args[3] == "add" {
 		f.adds = append(f.adds, call)
 		profile := args[2]
@@ -641,7 +684,7 @@ func (f *profilePluginFixture) Run(_ context.Context, name string, args ...strin
 		if strings.Contains(args[4], "reverse-skill") {
 			f.dumps[profile] += "dsh-reverse-skill\n"
 		}
-		if strings.Contains(args[4], "mcp-client") {
+		if strings.Contains(args[4], "mcp-client") && !f.omitMCPMarker {
 			f.dumps[profile] += "dsh-mcp-client\n"
 		}
 		return "", nil

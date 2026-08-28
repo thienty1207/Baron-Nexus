@@ -2,6 +2,7 @@ package install
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -97,22 +98,37 @@ func InstallDSHPluginsWithReport(ctx context.Context, runner CommandRunner, _ st
 		packageName string
 		fallback    string
 		marker      string
+		dependency  string
 	}{
 		{packageName: "superpowers-dsh", fallback: "superpowers-dsh@" + LatestDependencySelector, marker: "superpowers-dsh"},
 		{fallback: "https://github.com/dhicoc/dsh-reverse-skill.git", marker: "dsh-reverse-skill"},
-		{packageName: "@deepseek-ai/dsh-mcp-client", fallback: "@deepseek-ai/dsh-mcp-client@" + LatestDependencySelector, marker: "dsh-mcp-client"},
+		{packageName: "@deepseek-ai/dsh-mcp-client", fallback: "@deepseek-ai/dsh-mcp-client@" + LatestDependencySelector, marker: "dsh-mcp-client", dependency: "@deepseek-ai/dsh-mcp-client"},
 	}
 	report := DSHPluginReport{}
 	latestPlugins := map[string]string{}
 	for _, profile := range []string{"web", "headless"} {
 		dump, err := runner.Run(ctx, "dsh", "--profile", profile, "--dump-config")
 		if err != nil {
-			return DSHPluginReport{}, fmt.Errorf("inspect DSH %s profile composition", profile)
+			return DSHPluginReport{}, fmt.Errorf("inspect DSH %s profile composition: %w", profile, err)
 		}
 		profileChanged := false
 		for _, plugin := range plugins {
 			present := DSHProfileHasMarker(dump, plugin.marker)
 			localVersion := dshProfileMarkerVersion(dump, plugin.marker)
+			if plugin.dependency != "" && !present {
+				dependencyOutput, dependencyErr := runner.Run(ctx, "dsh", "plugin", "--profile", profile, "list", "--depth", "0", "--json")
+				if dependencyErr != nil {
+					return DSHPluginReport{}, fmt.Errorf("inspect DSH %s profile dependencies: %w", profile, dependencyErr)
+				}
+				dependencyVersion, dependencyPresent, parseErr := dshProfileDependency(dependencyOutput, plugin.dependency)
+				if parseErr != nil {
+					return DSHPluginReport{}, fmt.Errorf("parse DSH %s profile dependencies: %w", profile, parseErr)
+				}
+				if dependencyPresent {
+					present = true
+					localVersion = dependencyVersion
+				}
+			}
 			latestVersion := ""
 			if plugin.packageName != "" && (!present || localVersion != "") && commandAvailable(runner, "npm") {
 				cached, cachedOK := latestPlugins[plugin.packageName]
@@ -148,10 +164,13 @@ func InstallDSHPluginsWithReport(ctx context.Context, runner CommandRunner, _ st
 		if profileChanged {
 			dump, err = runner.Run(ctx, "dsh", "--profile", profile, "--dump-config")
 			if err != nil {
-				return DSHPluginReport{}, fmt.Errorf("verify DSH %s profile composition", profile)
+				return DSHPluginReport{}, fmt.Errorf("verify DSH %s profile composition: %w", profile, err)
 			}
 		}
-		for _, marker := range []string{"superpowers-dsh", "dsh-reverse-skill", "dsh-mcp-client"} {
+		// dsh-mcp-client is a dependency consumed by the profile's MCP patch,
+		// not a DSH bundle. DSH therefore lists it in package.json but omits it
+		// from --dump-config's composed bundle tree.
+		for _, marker := range []string{"superpowers-dsh", "dsh-reverse-skill"} {
 			if !DSHProfileHasMarker(dump, marker) {
 				return DSHPluginReport{}, fmt.Errorf("DSH %s profile composition did not contain %s", profile, marker)
 			}
@@ -170,6 +189,30 @@ func dshProfileMarkerVersion(dump, marker string) string {
 		}
 	}
 	return ""
+}
+
+type dshProfilePackage struct {
+	Dependencies map[string]struct {
+		Version string `json:"version"`
+	} `json:"dependencies"`
+}
+
+func dshProfileDependency(output, packageName string) (string, bool, error) {
+	var profiles []dshProfilePackage
+	if err := json.Unmarshal([]byte(output), &profiles); err != nil {
+		var profile dshProfilePackage
+		if singleErr := json.Unmarshal([]byte(output), &profile); singleErr != nil {
+			return "", false, fmt.Errorf("DSH dependency list is not valid JSON")
+		}
+		profiles = []dshProfilePackage{profile}
+	}
+	for _, profile := range profiles {
+		dependency, ok := profile.Dependencies[packageName]
+		if ok {
+			return strings.TrimSpace(dependency.Version), true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // DSHProfileHasMarker matches a plugin identity token from DSH's text, JSON,
@@ -201,7 +244,7 @@ func VerifyDSHProfile(ctx context.Context, runner CommandRunner) error {
 	for _, profile := range []string{"web", "headless"} {
 		dump, err := runner.Run(ctx, "dsh", "--profile", profile, "--dump-config")
 		if err != nil {
-			return fmt.Errorf("verify DSH %s profile composition", profile)
+			return fmt.Errorf("verify DSH %s profile composition: %w", profile, err)
 		}
 		for _, marker := range []string{"superpowers-dsh", "dsh-reverse-skill", "baron-dsh-adapter", "baron-ddg-search", "ddg-search"} {
 			if !DSHProfileHasMarker(dump, marker) {
