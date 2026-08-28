@@ -92,6 +92,21 @@ func TestExecuteFullPurgeRemovesCachesRecreatedByCleanupCommands(t *testing.T) {
 	}
 }
 
+func TestPurgeDockerUsesRemoveSubcommandsForVolumesAndNetworks(t *testing.T) {
+	runner := &fullPurgeRunner{}
+	report := Report{}
+	purgeDocker(context.Background(), runner, &report)
+	joined := strings.Join(runner.calls, "\n")
+	for _, want := range []string{
+		"docker volume rm volume-1",
+		"docker network rm network-1",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("Docker cleanup did not use %q: %#v", want, runner.calls)
+		}
+	}
+}
+
 func TestExecuteFullPurgeRemovesKnownCodexLauncherAndExecutableBackups(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, ".local", "bin")

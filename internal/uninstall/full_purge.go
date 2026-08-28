@@ -481,13 +481,13 @@ func purgeDocker(ctx context.Context, runner install.CommandRunner, report *Repo
 	}
 	queries := []struct {
 		args   []string
-		remove string
+		remove []string
 		label  string
 	}{
-		{args: []string{"ps", "-aq"}, remove: "rm", label: "containers"},
-		{args: []string{"volume", "ls", "-q"}, remove: "volume", label: "volumes"},
-		{args: []string{"images", "-aq"}, remove: "rmi", label: "images"},
-		{args: []string{"network", "ls", "--filter", "type=custom", "-q"}, remove: "network", label: "networks"},
+		{args: []string{"ps", "-aq"}, remove: []string{"rm", "-f"}, label: "containers"},
+		{args: []string{"volume", "ls", "-q"}, remove: []string{"volume", "rm"}, label: "volumes"},
+		{args: []string{"images", "-aq"}, remove: []string{"rmi"}, label: "images"},
+		{args: []string{"network", "ls", "--filter", "type=custom", "-q"}, remove: []string{"network", "rm"}, label: "networks"},
 	}
 	for _, query := range queries {
 		output, err := runDocker(ctx, runner, query.args...)
@@ -499,10 +499,7 @@ func purgeDocker(ctx context.Context, runner install.CommandRunner, report *Repo
 		if len(ids) == 0 {
 			continue
 		}
-		args := append([]string{query.remove}, ids...)
-		if query.remove == "rm" {
-			args = append([]string{"rm", "-f"}, ids...)
-		}
+		args := append(append([]string(nil), query.remove...), ids...)
 		if _, err := runDocker(ctx, runner, args...); err != nil {
 			report.Warnings = append(report.Warnings, "Docker "+query.label+" cleanup failed")
 		}

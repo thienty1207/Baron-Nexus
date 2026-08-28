@@ -29,3 +29,5 @@
 .baron/runtime/
 .baron/*.bak
 .baron/*.tmp
+
+# Per-project Baron runtime and credentials (rules are also merged into projects).
