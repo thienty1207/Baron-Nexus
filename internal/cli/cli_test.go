@@ -106,6 +106,21 @@ func TestUninstallConfirmationAcceptsYOrEmptyAndRejectsOtherAnswers(t *testing.T
 	}
 }
 
+func TestUninstallDefaultsToFullPurge(t *testing.T) {
+	called := false
+	purgeAll := false
+	code := Run([]string{"uninstall", "--yes"}, Options{
+		Uninstall: func(value bool) (string, error) {
+			called = true
+			purgeAll = value
+			return "removed", nil
+		},
+	})
+	if code != ExitSuccess || !called || !purgeAll {
+		t.Fatalf("uninstall default purge=%v code=%d called=%v", purgeAll, code, called)
+	}
+}
+
 func TestPermissionsCommandsInvokeDedicatedHandlers(t *testing.T) {
 	var out bytes.Buffer
 	called := ""
@@ -136,9 +151,9 @@ func TestVersionFlagUsesBaronFormat(t *testing.T) {
 	}
 }
 
-func TestDefaultVersionIsBaron018(t *testing.T) {
-	if version.Value != "0.1.8" {
-		t.Fatalf("default version=%q, want 0.1.8", version.Value)
+func TestDefaultVersionIsBaron019(t *testing.T) {
+	if version.Value != "0.1.9" {
+		t.Fatalf("default version=%q, want 0.1.9", version.Value)
 	}
 }
 

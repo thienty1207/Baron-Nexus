@@ -375,20 +375,21 @@ func confirmUninstall(in io.Reader, out io.Writer) (bool, error) {
 }
 
 func uninstallCommand(options Options) *cobra.Command {
-	var yes, purgeShared bool
+	var yes bool
+	purgeAll := true
 	command := &cobra.Command{
 		Use:   "uninstall",
-		Short: "Remove Baron-managed state and integrations.",
+		Short: "Remove Baron and its known runtime state and host dependencies.",
 		Args:  exactArgs(0, "uninstall accepts no arguments"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if options.Uninstall == nil {
 				return errors.New("uninstall handler is not configured")
 			}
 			if !yes {
-				plan := "Baron uninstall will remove Baron-managed files, integrations, and installed packages."
+				plan := "Baron full uninstall will remove Baron, DSH, Codex, Tencent, Docker, known host dependencies, caches, and known credentials."
 				if options.UninstallPlan != nil {
 					var err error
-					plan, err = options.UninstallPlan(purgeShared)
+					plan, err = options.UninstallPlan(purgeAll)
 					if err != nil {
 						return err
 					}
@@ -408,7 +409,7 @@ func uninstallCommand(options Options) *cobra.Command {
 			message := ""
 			action := func() error {
 				var err error
-				message, err = options.Uninstall(purgeShared)
+				message, err = options.Uninstall(purgeAll)
 				return err
 			}
 			if err := runWithLoading(options, "Uninstalling Baron", action); err != nil {
@@ -424,7 +425,8 @@ func uninstallCommand(options Options) *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&yes, "yes", false, "skip the interactive confirmation prompt")
-	command.Flags().BoolVar(&purgeShared, "purge-shared", false, "also remove shared DSH/Codex homes; keep shared Node/Docker/WSL tools")
+	command.Flags().BoolVar(&purgeAll, "purge-all", true, "remove Baron, DSH, Codex, Tencent, Docker, host dependencies, caches, and known credentials")
+	command.Flags().BoolVar(&purgeAll, "purge-shared", true, "deprecated alias for --purge-all")
 	return command
 }
 

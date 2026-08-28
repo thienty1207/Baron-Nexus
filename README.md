@@ -1,7 +1,7 @@
 # Baron Nexus
 
-Current release: `0.1.8` — adds loading feedback for initialization, explicit opt-in
-auto-accept launchers, and a guarded uninstall while retaining the latest-at-run
+Current release: `0.1.9` — adds loading feedback for initialization, explicit opt-in
+auto-accept launchers, and a path-checked full uninstall while retaining the latest-at-run
 dependency refresh, concise DeepSeek key rotation, and automated
 Ubuntu/Debian first-install bootstrap.
 
@@ -32,13 +32,15 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.8`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.9`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
-latest Node/uv releases at run time, and refreshes Docker Engine/Compose,
-Node/npm/npx, pnpm, and uv/uvx from their official sources. A uv archive and
-checksum are always taken from the same resolved release tag and the complete
-pair is retried once after a digest mismatch. The installer refuses to replace
+latest Node/uv releases at run time, and checks Docker Engine/Compose,
+Node/npm/npx, pnpm, and uv/uvx against their current official candidates. A
+verified equal version skips its download and mutation; an outdated component
+is updated to the exact resolved version. A uv archive and checksum are always
+taken from the same resolved release tag and the complete pair is retried once
+after a digest mismatch. The installer refuses to replace
 an existing binary unless replacement is explicitly enabled, and never reads
 or stores the sudo password. If the sudo ticket expires during a long
 bootstrap, the installer asks sudo to authenticate again and retries the
@@ -61,7 +63,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.8`. The PowerShell installer resolves the
+The expected output is `baron 0.1.9`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
@@ -100,9 +102,10 @@ service prerequisites installed and started first. Baron does not silently
 install or control those Windows UI components, and Windows does not use the
 Linux `sudo -v` preflight.
 
-The sequence is idempotent, so rerunning it refreshes the latest dependency
-channels and repairs missing Baron-owned pieces without replacing project
-identity or user-owned agent configuration. On Ubuntu/Debian, Baron performs
+The sequence is idempotent, so rerunning it checks every live latest dependency
+candidate, skips verified-equal components, and repairs only missing or stale
+Baron-owned pieces without replacing project identity or user-owned agent
+configuration. On Ubuntu/Debian, Baron performs
 `sudo -v` before host/release/Tencent network work, uses sudo only for system
 operations, and never receives, echoes, or stores the password. If
 authorization expires, Baron requests sudo again once and stops with a repair
@@ -120,6 +123,9 @@ Example:
 ```text
 [Baron] Requesting sudo authorization for host dependencies...
 [Baron] sudo authorization accepted
+[Baron] Checking latest dependency versions...
+[Baron] Node.js 26.8.1, npm, and npx are already latest.
+[Baron] DSH 0.2.0 is already latest.
 [Baron] Downloading uv archive (attempt 1)...
 [Baron]   uv archive (attempt 1): 12.0 MiB/19.3 MiB (62%)
 [Baron] uv archive (attempt 1) downloaded.
@@ -130,6 +136,10 @@ All long-running initializer, setup, repair, install, update, and uninstall
 commands also show an ASCII loading indicator on an interactive terminal and
 stable start/completion lines when output is redirected. The UI never prints
 credentials or raw child-process output.
+
+Set `BARON_INSTALL_TIMINGS=1` to include phase timing lines for discovery,
+dependency mutation, validation, and total bootstrap duration when diagnosing a
+slow machine. The timing output contains no command output or credentials.
 
 ### 3. Later version refresh: `baron update`
 
@@ -275,17 +285,31 @@ restore target already exists, Baron stops safely; choose
 `baron restore <archive> --replace-existing` only when you want the current
 state moved to a recoverable sibling backup first.
 
-To remove Baron, its registered project state, managed hooks, DSH key, Tencent
-deployment, npm packages, adapters, receipts, and its own binary, run:
+To remove Baron and its known runtime footprint, run one command:
 
 ```text
 baron uninstall
 ```
 
-Type `UNINSTALL BARON` when prompted, or pass `--yes` for an explicit scripted
-run. Add `--purge-shared` only when you also want to delete the complete DSH and
-Codex user directories. Baron does not silently remove shared Node, Docker,
-WSL, or unrelated npm packages; those may be used by other applications.
+The default is the full purge. It removes Baron global state, project state,
+managed hooks and launchers, DSH and Codex homes, DeepSeek/Codex/pnpm packages,
+Tencent deployment state, Docker objects and known Docker data, Baron-managed
+Node/npm/pnpm/uv caches and binaries, and known API-key assignments in the
+standard shell profiles. On Ubuntu/Debian it also purges the known Docker and
+Node/npm packages, services, repository entries, and host data through the
+existing sudo ticket. On Windows it uses `winget` when available for Docker
+Desktop and Node.js; otherwise the report includes a warning instead of
+pretending the host component was removed.
+
+Press Enter, `y`, or `Y` at the confirmation prompt, or pass `--yes` for an
+explicit scripted run. `--purge-all` is the explicit default; the older
+`--purge-shared` flag remains as a compatibility alias. A verified checkout at
+`$HOME/Baron-Nexus` is removed only when its `.git/config` points to
+`thienty1207/Baron-Nexus`; arbitrary directories are never scanned or deleted.
+The command cannot change the parent shell's environment, so any exported key
+is reported as requiring `unset` or a new shell after uninstall. It also does
+not claim to erase unrelated applications or make the operating system
+literally factory-new.
 
 ## Troubleshooting
 

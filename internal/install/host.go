@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -37,6 +38,8 @@ type HostToolchainOptions struct {
 	GOARCH        string
 	OSReleasePath string
 	Home          string
+	HTTPClient    *http.Client
+	Apt           *AptSession
 	Downloader    FileDownloader
 	Progress      ProgressReporter
 }
@@ -52,9 +55,10 @@ type HostToolchainReport struct {
 	Message      string
 }
 
-// EnsureHostToolchain resolves and refreshes Node/npm/npx, pnpm, and uv/uvx on
-// Ubuntu/Debian. Sudo is authenticated before the first package or release
-// download. Windows remains on the documented manual Docker/WSL boundary.
+// EnsureHostToolchain resolves live Node/npm/npx, pnpm, and uv/uvx versions on
+// Ubuntu/Debian and mutates only missing or stale components. Sudo is
+// authenticated before the first package or release download. Windows remains
+// on the documented manual Docker/WSL boundary.
 func EnsureHostToolchain(ctx context.Context, runner CommandRunner, options HostToolchainOptions) (HostToolchainReport, error) {
 	if runner == nil {
 		return HostToolchainReport{}, errors.New("host bootstrap runner is not configured")
@@ -88,7 +92,7 @@ func EnsureHostToolchain(ctx context.Context, runner CommandRunner, options Host
 	}
 	reportStep(options.Progress, "sudo authorization accepted")
 	if options.Downloader == nil {
-		options.Downloader = httpFileDownloader{Progress: options.Progress}
+		options.Downloader = httpFileDownloader{Progress: options.Progress, Client: configuredHTTPClient(options.HTTPClient)}
 	}
 	home := strings.TrimSpace(options.Home)
 	if home == "" {
@@ -179,6 +183,14 @@ type nodeReleaseMetadata struct {
 }
 
 func resolveLatestNodeMajor(ctx context.Context, downloader FileDownloader, reporters ...ProgressReporter) (string, error) {
+	version, err := resolveLatestNodeVersion(ctx, downloader, reporters...)
+	if err != nil {
+		return "", err
+	}
+	return strings.Split(version, ".")[0], nil
+}
+
+func resolveLatestNodeVersion(ctx context.Context, downloader FileDownloader, reporters ...ProgressReporter) (string, error) {
 	reporter := firstProgressReporter(reporters...)
 	if downloader == nil {
 		return "", errors.New("Node release downloader is not configured")
@@ -201,26 +213,46 @@ func resolveLatestNodeMajor(ctx context.Context, downloader FileDownloader, repo
 		return "", errors.New("decode the latest Node release metadata")
 	}
 	for _, release := range releases {
-		version := strings.TrimPrefix(strings.TrimSpace(release.Version), "v")
-		parts := strings.Split(version, ".")
-		if len(parts) != 3 || parts[0] == "" {
+		version, versionErr := NormalizeVersion(release.Version)
+		if versionErr != nil {
 			continue
 		}
-		major, err := strconv.Atoi(parts[0])
-		if err != nil || major < 24 {
+		if !supportedHostNodeVersion(version) {
 			continue
 		}
-		return strconv.Itoa(major), nil
+		return version, nil
 	}
 	return "", errors.New("latest Node release metadata contains no supported release")
 }
 
 func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options HostToolchainOptions, distro linuxDistribution) (bool, error) {
-	latestMajor, err := resolveLatestNodeMajor(ctx, options.Downloader, options.Progress)
+	latestVersion, err := resolveLatestNodeVersion(ctx, options.Downloader, options.Progress)
 	if err != nil {
 		return false, err
 	}
-	if _, err := runSudoProgress(ctx, runner, options.Progress, "Refreshing apt metadata for Node.js", "apt-get", "update"); err != nil {
+	latestMajor := strings.Split(latestVersion, ".")[0]
+	if commandAvailable(runner, "node") {
+		if output, versionErr := runner.Run(ctx, "node", "--version"); versionErr == nil {
+			localVersion, localVersionErr := NormalizeVersion(output)
+			if localVersionErr == nil && localVersion == latestVersion && supportedHostNodeVersion(output) && commandAvailable(runner, "npm") && commandAvailable(runner, "npx") {
+				reportStep(options.Progress, fmt.Sprintf("Node.js %s, npm, and npx are already latest.", latestVersion))
+				return false, nil
+			}
+			match := hostNodeVersionPattern.FindStringSubmatch(strings.TrimSpace(output))
+			if localVersionErr == nil && localVersion == latestVersion && len(match) == 3 && match[1] == latestMajor && supportedHostNodeVersion(output) {
+				if err := refreshAptMetadata(ctx, runner, options.Progress, options.Apt, "npm/npx repair"); err != nil {
+					return false, errors.New("Node bootstrap could not refresh apt metadata; retry after sudo authorization")
+				}
+				if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing npm and npx", "apt-get", "install", "-y", "npm"); err != nil {
+					return false, errors.New("Node is current but npm/npx could not be installed")
+				}
+				if commandAvailable(runner, "npm") && commandAvailable(runner, "npx") {
+					return true, nil
+				}
+			}
+		}
+	}
+	if err := refreshAptMetadata(ctx, runner, options.Progress, options.Apt, "Node.js"); err != nil {
 		return false, errors.New("Node bootstrap could not refresh apt metadata; retry after sudo authorization")
 	}
 	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing Node.js bootstrap prerequisites", "apt-get", "install", "-y", "ca-certificates", "gnupg"); err != nil {
@@ -253,14 +285,22 @@ func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options Host
 	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing the NodeSource apt repository definition", "install", "-m", "0644", sourcePath, "/etc/apt/sources.list.d/nodesource.sources"); err != nil {
 		return false, errors.New("install the official NodeSource apt repository definition")
 	}
-	if _, err := runSudoProgress(ctx, runner, options.Progress, "Refreshing the NodeSource apt repository", "apt-get", "update"); err != nil {
+	if options.Apt != nil {
+		options.Apt.invalidate()
+	}
+	if err := refreshAptMetadata(ctx, runner, options.Progress, options.Apt, "the NodeSource repository"); err != nil {
 		return false, errors.New("Node bootstrap could not refresh the NodeSource apt repository")
 	}
 	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing Node.js", "apt-get", "install", "-y", "nodejs"); err != nil {
 		return false, fmt.Errorf("install the latest supported Node major on %s: %w", distro.ID, err)
 	}
-	if output, versionErr := runner.Run(ctx, "node", "--version"); versionErr != nil || !supportedHostNodeVersion(output) {
-		return false, fmt.Errorf("Node was installed but is below the supported 22.19+ or 24+ version (latest major %s)", latestMajor)
+	output, versionErr := runner.Run(ctx, "node", "--version")
+	installedVersion, normalizeErr := NormalizeVersion(output)
+	if versionErr != nil || normalizeErr != nil || installedVersion != latestVersion {
+		if normalizeErr != nil {
+			return false, fmt.Errorf("Node was installed but did not report the resolved latest version %s", latestVersion)
+		}
+		return false, fmt.Errorf("Node was installed at %s, but the resolved latest version is %s", installedVersion, latestVersion)
 	}
 	if !commandAvailable(runner, "npm") || !commandAvailable(runner, "npx") {
 		if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing npm and npx", "apt-get", "install", "-y", "npm"); err != nil {
@@ -274,17 +314,13 @@ func ensureNodeToolchain(ctx context.Context, runner CommandRunner, options Host
 }
 
 func ensurePnpm(ctx context.Context, runner CommandRunner, reporters ...ProgressReporter) (bool, error) {
-	reporter := firstProgressReporter(reporters...)
-	if !commandAvailable(runner, "npm") {
-		return false, errors.New("pnpm bootstrap requires npm")
+	report, err := EnsureNPMDependencyLatest(ctx, runner, NPMDependencySpec{
+		Name: "pnpm", Package: "pnpm", Command: "pnpm",
+	}, reporters...)
+	if err != nil {
+		return false, err
 	}
-	if _, err := runSudoProgress(ctx, runner, reporter, "Installing pnpm through npm", "npm", "install", "--global", "pnpm@latest"); err != nil {
-		return false, errors.New("install the latest pnpm through npm")
-	}
-	if !commandAvailable(runner, "pnpm") {
-		return false, errors.New("pnpm was installed but is not on PATH")
-	}
-	return true, nil
+	return report.State.Changed, nil
 }
 
 func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownloader, goarch, binDir string, reporters ...ProgressReporter) (bool, error) {
@@ -301,6 +337,22 @@ func ensureUV(ctx context.Context, runner CommandRunner, downloader FileDownload
 	tag, err := resolveLatestUVTag(ctx, downloader, filepath.Join(tempRoot, "release.json"), reporter)
 	if err != nil {
 		return false, err
+	}
+	latestVersion, err := NormalizeVersion(tag)
+	if err != nil {
+		return false, fmt.Errorf("latest uv release version is unknown: %w", err)
+	}
+	if commandAvailable(runner, "uv") && commandAvailable(runner, "uvx") {
+		uvOutput, uvErr := runner.Run(ctx, "uv", "--version")
+		uvxOutput, uvxErr := runner.Run(ctx, "uvx", "--version")
+		if uvErr == nil && uvxErr == nil {
+			localUV, localUVErr := NormalizeVersion(uvOutput)
+			localUVX, localUVXErr := NormalizeVersion(uvxOutput)
+			if localUVErr == nil && localUVXErr == nil && localUV == latestVersion && localUVX == latestVersion {
+				reportStep(reporter, fmt.Sprintf("uv/uvx %s are already latest.", latestVersion))
+				return false, nil
+			}
+		}
 	}
 	var archivePath string
 	for attempt := 1; attempt <= uvDownloadAttempts; attempt++ {

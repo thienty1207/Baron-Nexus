@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // InteractiveCommandRunner is implemented by the native runner so sudo can
@@ -34,14 +35,16 @@ type DockerBootstrapOptions struct {
 	GOOS          string
 	GOARCH        string
 	OSReleasePath string
+	HTTPClient    *http.Client
+	Apt           *AptSession
 	Downloader    FileDownloader
 	Progress      ProgressReporter
 	AptKeyPath    string
 	AptSourcePath string
-	// Refresh resolves the official stable repository and asks apt to install
-	// the latest available Docker Engine/Compose packages even when the
-	// daemon is already healthy. The normal health/readiness path leaves this
-	// false so diagnostics never mutate a user's host.
+	// Refresh checks the official stable repository candidates and updates stale
+	// Docker Engine/Compose packages. A healthy daemon with matching candidates
+	// remains untouched; the normal health/readiness path leaves this false so
+	// diagnostics never mutate a user's host.
 	Refresh bool
 }
 
@@ -57,6 +60,8 @@ type DockerBootstrapReport struct {
 	NeedsRelogin  bool
 	Message       string
 }
+
+var dockerPackageNames = []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"}
 
 type linuxDistribution struct {
 	ID              string
@@ -123,7 +128,20 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 				reportStep(options.Progress, "Docker Engine is already ready.")
 				return report, nil
 			}
-			if err := installDockerPackages(ctx, runner, options, distro, codename); err != nil {
+			if err := refreshAptMetadata(ctx, runner, options.Progress, options.Apt, "Docker"); err != nil {
+				return report, errors.New("Docker bootstrap could not refresh apt metadata; run sudo apt-get update and retry")
+			}
+			known, current, stale := dockerPackagesCurrent(ctx, runner)
+			if !known {
+				return report, errors.New("latest Docker package state is unknown; verify apt metadata and retry")
+			}
+			if current {
+				report.Ready = true
+				report.Message = "Docker Engine and daemon are already latest."
+				reportStep(options.Progress, "Docker Engine and packages are already latest.")
+				return report, nil
+			}
+			if err := installDockerPackages(ctx, runner, options, distro, codename, stale); err != nil {
 				return report, err
 			}
 			report.Ready = true
@@ -140,7 +158,21 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 		if _, err := runSudo(ctx, runner, "docker", "info"); err == nil {
 			report.UsedSudo = true
 			if options.Refresh {
-				if err := installDockerPackages(ctx, runner, options, distro, codename); err != nil {
+				if err := refreshAptMetadata(ctx, runner, options.Progress, options.Apt, "Docker"); err != nil {
+					return report, errors.New("Docker bootstrap could not refresh apt metadata; run sudo apt-get update and retry")
+				}
+				known, current, stale := dockerPackagesCurrent(ctx, runner)
+				if !known {
+					return report, errors.New("latest Docker package state is unknown; verify apt metadata and retry")
+				}
+				if current {
+					report.Ready = true
+					report.NeedsRelogin = true
+					report.Message = dockerPermissionMessage(report.DaemonStarted)
+					reportStep(options.Progress, "Docker Engine and packages are already latest.")
+					return report, nil
+				}
+				if err := installDockerPackages(ctx, runner, options, distro, codename, stale); err != nil {
 					return report, err
 				}
 				report.Installed = true
@@ -158,7 +190,7 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 		}
 	}
 
-	if err := installDockerPackages(ctx, runner, options, distro, codename); err != nil {
+	if err := installDockerPackages(ctx, runner, options, distro, codename, nil); err != nil {
 		return report, err
 	}
 	report.Installed = true
@@ -196,8 +228,8 @@ func preflightSudo(ctx context.Context, runner CommandRunner) error {
 	return nil
 }
 
-func installDockerPackages(ctx context.Context, runner CommandRunner, options DockerBootstrapOptions, distro linuxDistribution, codename string) error {
-	if _, err := runSudoProgress(ctx, runner, options.Progress, "Refreshing apt metadata for Docker", "apt-get", "update"); err != nil {
+func installDockerPackages(ctx context.Context, runner CommandRunner, options DockerBootstrapOptions, distro linuxDistribution, codename string, packages []string) error {
+	if err := refreshAptMetadata(ctx, runner, options.Progress, options.Apt, "Docker"); err != nil {
 		return errors.New("Docker bootstrap could not refresh apt metadata; run sudo apt-get update and retry")
 	}
 	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing Docker package prerequisites", "apt-get", "install", "-y", "ca-certificates"); err != nil {
@@ -224,7 +256,7 @@ func installDockerPackages(ctx context.Context, runner CommandRunner, options Do
 		}
 	}
 	if options.Downloader == nil {
-		options.Downloader = httpFileDownloader{Progress: options.Progress}
+		options.Downloader = httpFileDownloader{Progress: options.Progress, Client: configuredHTTPClient(options.HTTPClient)}
 	}
 	platform := distro.ID
 	repository := "https://download.docker.com/linux/" + platform
@@ -258,11 +290,16 @@ func installDockerPackages(ctx context.Context, runner CommandRunner, options Do
 			return errors.New("install the official Docker apt repository definition")
 		}
 	}
-	if _, err := runSudoProgress(ctx, runner, options.Progress, "Refreshing the Docker apt repository", "apt-get", "update"); err != nil {
+	if options.Apt != nil {
+		options.Apt.invalidate()
+	}
+	if err := refreshAptMetadata(ctx, runner, options.Progress, options.Apt, "the Docker repository"); err != nil {
 		cleanup()
 		return errors.New("Docker bootstrap could not refresh the official Docker apt repository")
 	}
-	packages := []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"}
+	if len(packages) == 0 {
+		packages = dockerPackageNames
+	}
 	args := append([]string{"apt-get", "install", "-y"}, packages...)
 	if _, err := runSudoProgress(ctx, runner, options.Progress, "Installing Docker Engine and Compose", args...); err != nil {
 		cleanup()
@@ -273,6 +310,48 @@ func installDockerPackages(ctx context.Context, runner CommandRunner, options Do
 		return errors.New("Docker packages installed but the service could not start; run sudo systemctl enable --now docker and retry")
 	}
 	return nil
+}
+
+func dockerPackagesCurrent(ctx context.Context, runner CommandRunner) (known, current bool, stale []string) {
+	if !commandAvailable(runner, "dpkg-query") || !commandAvailable(runner, "apt-cache") {
+		return false, false, nil
+	}
+	stale = []string{}
+	for _, packageName := range dockerPackageNames {
+		installedOutput, err := runner.Run(ctx, "dpkg-query", "-W", "-f=${Version}", packageName)
+		if err != nil {
+			stale = append(stale, packageName)
+			continue
+		}
+		installed := strings.TrimSpace(installedOutput)
+		if installed == "" {
+			stale = append(stale, packageName)
+			continue
+		}
+		candidateOutput, err := runner.Run(ctx, "apt-cache", "policy", packageName)
+		if err != nil {
+			return false, false, nil
+		}
+		candidate := aptCandidateVersion(candidateOutput)
+		if candidate == "" || !strings.Contains(strings.ToLower(candidateOutput), "download.docker.com") {
+			stale = append(stale, packageName)
+			continue
+		}
+		if installed != candidate {
+			stale = append(stale, packageName)
+		}
+	}
+	return true, len(stale) == 0, stale
+}
+
+func aptCandidateVersion(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(key), "Candidate") {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func pathExists(path string) bool {
@@ -338,8 +417,58 @@ func firstNonEmptyLinux(values ...string) string {
 
 const maxHTTPDownloadBytes = 128 * 1024 * 1024
 
+func configuredHTTPClient(base *http.Client) *http.Client {
+	if base == nil {
+		return &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: secureHTTPTransport(),
+		}
+	}
+	if base.Transport == nil {
+		clone := *base
+		if clone.Timeout == 0 {
+			clone.Timeout = 30 * time.Second
+		}
+		clone.Transport = secureHTTPTransport()
+		return &clone
+	}
+	transport, ok := base.Transport.(*http.Transport)
+	if !ok {
+		return base
+	}
+	clone := *base
+	if clone.Timeout == 0 {
+		clone.Timeout = 30 * time.Second
+	}
+	if base.Timeout != 0 && transport.TLSClientConfig != nil && transport.TLSClientConfig.MinVersion >= tls.VersionTLS12 {
+		return base
+	}
+	secureTransport := transport.Clone()
+	tlsConfig := &tls.Config{}
+	if transport.TLSClientConfig != nil {
+		tlsConfig = transport.TLSClientConfig.Clone()
+	}
+	tlsConfig.MinVersion = tls.VersionTLS12
+	secureTransport.TLSClientConfig = tlsConfig
+	clone.Transport = secureTransport
+	return &clone
+}
+
+func secureHTTPTransport() *http.Transport {
+	transport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}, MaxIdleConns: 16, MaxIdleConnsPerHost: 8}
+	}
+	clone := transport.Clone()
+	clone.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	clone.MaxIdleConns = 16
+	clone.MaxIdleConnsPerHost = 8
+	return clone
+}
+
 type httpFileDownloader struct {
 	Progress ProgressReporter
+	Client   *http.Client
 }
 
 type labeledFileDownloader interface {
@@ -381,7 +510,10 @@ func (d httpFileDownloader) download(ctx context.Context, rawURL, destination, l
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}}}
+	client := d.Client
+	if client == nil {
+		client = configuredHTTPClient(nil)
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return err

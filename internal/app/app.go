@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -629,7 +630,17 @@ func classifyError(err error) error {
 }
 
 func New() *App {
-	return &App{HTTPClient: &http.Client{Timeout: 3 * time.Second}, CommandRunner: doctor.OSProbe{}}
+	transport := &http.Transport{}
+	if defaultTransport, ok := http.DefaultTransport.(*http.Transport); ok {
+		transport = defaultTransport.Clone()
+	}
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	transport.MaxIdleConns = 16
+	transport.MaxIdleConnsPerHost = 8
+	return &App{HTTPClient: &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: transport,
+	}, CommandRunner: doctor.OSProbe{}}
 }
 
 func (a *App) commandRunner() install.CommandRunner {
@@ -834,6 +845,17 @@ func (a *App) uninstallOptions(purgeShared bool) (baronuninstall.Options, error)
 			return baronuninstall.Options{}, err
 		}
 	}
+	homeDir := ""
+	sourceCheckouts := []string(nil)
+	environmentFiles := []string(nil)
+	if purgeShared {
+		homeDir, err = os.UserHomeDir()
+		if err != nil {
+			return baronuninstall.Options{}, fmt.Errorf("resolve user home for full uninstall: %w", err)
+		}
+		sourceCheckouts = baronuninstall.DiscoverBaronSourceCheckouts(homeDir)
+		environmentFiles = baronuninstall.DefaultEnvironmentFiles(homeDir)
+	}
 	return baronuninstall.Options{
 		GlobalPath:           globalPath,
 		DSHConfigPath:        global.DSHConfigPath,
@@ -849,6 +871,11 @@ func (a *App) uninstallOptions(purgeShared bool) (baronuninstall.Options, error)
 		ProjectRoots:         projectRoots,
 		ExecutablePath:       executablePath,
 		PurgeShared:          purgeShared,
+		PurgeAll:             purgeShared,
+		HomeDir:              homeDir,
+		SourceCheckouts:      sourceCheckouts,
+		EnvironmentFiles:     environmentFiles,
+		GOOS:                 runtime.GOOS,
 		Runner:               a.commandRunner(),
 	}, nil
 }
@@ -1130,6 +1157,10 @@ func canonicalEvent(value string) contracts.EventType {
 }
 
 func (a *App) DSHInit() error {
+	return a.dshInitWithPlan(context.Background(), BootstrapPlan{}, nil)
+}
+
+func (a *App) dshInitWithPlan(ctx context.Context, plan BootstrapPlan, reporter install.ProgressReporter) error {
 	if _, err := a.resolveDSHCredential(); err != nil {
 		return err
 	}
@@ -1140,48 +1171,71 @@ func (a *App) DSHInit() error {
 	if dshHome, homeErr := install.DSHHome(processEnvironment()); homeErr == nil {
 		global.DSHHomePath = dshHome
 	}
-	dshVersion, err := install.InstallDSHWithVersion(context.Background(), a.commandRunner(), install.LatestDependencySelector)
+	runner := a.commandRunner()
+	dshDependency := install.DependencyReport{}
+	if state, ok := plan.State("dsh"); ok {
+		dshDependency, err = install.EnsureNPMDependencyState(ctx, runner, install.NPMDependencySpec{Name: "DSH", Package: "@deepseek-ai/dsh", Command: "dsh"}, state, reporter)
+	} else {
+		dshDependency, err = install.InstallDSHLatestWithReport(ctx, runner, reporter)
+	}
 	if err != nil {
 		return err
 	}
-	if err := install.InstallDSHPlugins(context.Background(), a.commandRunner(), dshVersion); err != nil {
+	dshVersion := dshDependency.State.LocalVersion
+	pluginReport, err := install.InstallDSHPluginsWithReport(ctx, runner, dshVersion, reporter)
+	if err != nil {
 		return err
 	}
+	dshChanged := dshDependency.State.Changed || pluginReport.Changed
 	globalDir := filepath.Dir(path)
 	adapterPath := filepath.Join(globalDir, "dsh-adapter")
-	if err := install.InstallEmbeddedDSHAdapter(adapterPath); err != nil {
+	adapterChanged, err := install.InstallEmbeddedDSHAdapterWithChange(adapterPath)
+	if err != nil {
 		return err
 	}
+	dshChanged = dshChanged || adapterChanged
 	profilePatchPath := ""
 	for _, profile := range []string{"web", "headless"} {
-		if _, err := a.commandRunner().Run(context.Background(), "dsh", "plugin", "--profile", profile, "add", adapterPath); err != nil {
-			return fmt.Errorf("install the Baron DSH adapter into the %s profile: %w", profile, err)
+		dump, err := runner.Run(ctx, "dsh", "--profile", profile, "--dump-config")
+		if err != nil {
+			return fmt.Errorf("inspect the Baron DSH adapter in the %s profile: %w", profile, err)
+		}
+		if !install.DSHProfileHasMarker(dump, "baron-dsh-adapter") {
+			if _, err := runner.Run(ctx, "dsh", "plugin", "--profile", profile, "add", adapterPath); err != nil {
+				return fmt.Errorf("install the Baron DSH adapter into the %s profile: %w", profile, err)
+			}
+			dshChanged = true
 		}
 		patchPath, patchErr := install.DSHProfilePatchPath(profile)
 		if patchErr != nil {
 			return patchErr
 		}
-		if err := install.EnsureDSHProfilePatch(patchPath); err != nil {
+		patchChanged, err := install.EnsureDSHProfilePatchWithChange(patchPath)
+		if err != nil {
 			return err
 		}
+		dshChanged = dshChanged || patchChanged
 		if profile == "web" {
 			profilePatchPath = patchPath
 		}
 	}
-	if err := install.VerifyDSHProfile(context.Background(), a.commandRunner()); err != nil {
-		return err
-	}
-	if err := install.ProbeDSHStartup(context.Background(), a.commandRunner()); err != nil {
-		return err
-	}
 	global.DSHConfigPath = filepath.Join(globalDir, "dsh.json")
 	global.DSHProfilePatchPath = profilePatchPath
-	report, err := installDSH(global.DSHConfigPath, dshVersion)
+	baseline, baselineChanged, err := installDSHWithChange(global.DSHConfigPath, dshVersion)
 	if err != nil {
 		return err
 	}
+	dshChanged = dshChanged || baselineChanged
+	if err := install.VerifyDSHProfile(ctx, runner); err != nil {
+		return err
+	}
+	if dshChanged {
+		if err := install.ProbeDSHStartup(ctx, runner); err != nil {
+			return err
+		}
+	}
 	global.DSHComponents = map[string]bool{}
-	for _, component := range report.Components {
+	for _, component := range baseline.Components {
 		switch component {
 		case "duckduckgo-search":
 			global.DSHComponents[component] = true
@@ -1192,7 +1246,7 @@ func (a *App) DSHInit() error {
 		}
 	}
 	receiptPath := filepath.Join(globalDir, "receipts", "dsh.json")
-	if err := install.WriteReceipt(receiptPath, install.Receipt{Component: "deepseek-harness", Version: dshVersion, Source: "npm:@deepseek-ai/dsh"}); err != nil {
+	if _, err := install.WriteReceiptIfChanged(receiptPath, install.Receipt{Component: "deepseek-harness", Version: dshVersion, Source: "npm:@deepseek-ai/dsh"}); err != nil {
 		return err
 	}
 	global.Receipts = appendReceipt(global.Receipts, receiptPath)
@@ -1200,10 +1254,22 @@ func (a *App) DSHInit() error {
 }
 
 func (a *App) CodexInit() error {
-	codexSource, codexVersion, err := install.InstallCodexWithVersion(context.Background(), a.commandRunner(), install.LatestDependencySelector)
+	return a.codexInitWithPlan(context.Background(), BootstrapPlan{}, nil)
+}
+
+func (a *App) codexInitWithPlan(ctx context.Context, plan BootstrapPlan, reporter install.ProgressReporter) error {
+	runner := a.commandRunner()
+	var err error
+	codexDependency := install.DependencyReport{}
+	if state, ok := plan.State("codex"); ok {
+		codexDependency, err = install.EnsureNPMDependencyState(ctx, runner, install.NPMDependencySpec{Name: "Codex", Package: "@openai/codex", Command: "codex"}, state, reporter)
+	} else {
+		codexDependency, err = install.InstallCodexLatestWithReport(ctx, runner, reporter)
+	}
 	if err != nil {
 		return err
 	}
+	codexSource, codexVersion := codexDependency.Source, codexDependency.State.LocalVersion
 	global, path, err := a.loadGlobal()
 	if err != nil {
 		return err
@@ -1220,20 +1286,20 @@ func (a *App) CodexInit() error {
 	global.CodexHooksPath = codexHooksPath
 	globalDir := filepath.Dir(path)
 	global.CodexAdapterPath = filepath.Join(globalDir, "codex-adapter")
-	if err := install.InstallEmbeddedCodexAdapter(global.CodexAdapterPath); err != nil {
+	if _, err := install.InstallEmbeddedCodexAdapterWithChange(global.CodexAdapterPath); err != nil {
 		return err
 	}
-	if err := mergeCodex(global.CodexHooksPath); err != nil {
+	if _, err := mergeCodexWithChange(global.CodexHooksPath); err != nil {
 		return err
 	}
 	global.CodexHooksInstalled = true
 	receiptPath := filepath.Join(globalDir, "receipts", "codex.json")
-	if err := install.WriteReceipt(receiptPath, install.Receipt{Component: "codex-cli", Version: codexVersion, Source: codexSource}); err != nil {
+	if _, err := install.WriteReceiptIfChanged(receiptPath, install.Receipt{Component: "codex-cli", Version: codexVersion, Source: codexSource}); err != nil {
 		return err
 	}
 	global.Receipts = appendReceipt(global.Receipts, receiptPath)
 	adapterReceiptPath := filepath.Join(globalDir, "receipts", "codex-adapter.json")
-	if err := install.WriteReceipt(adapterReceiptPath, install.Receipt{Component: "codex-adapter", Version: install.EmbeddedCodexAdapterVersion, Source: "embedded:adapters/codex"}); err != nil {
+	if _, err := install.WriteReceiptIfChanged(adapterReceiptPath, install.Receipt{Component: "codex-adapter", Version: install.EmbeddedCodexAdapterVersion, Source: "embedded:adapters/codex"}); err != nil {
 		return err
 	}
 	global.Receipts = appendReceipt(global.Receipts, adapterReceiptPath)
@@ -1669,8 +1735,17 @@ func processEnvironment() map[string]string {
 // The imports are kept behind these tiny adapters so app wiring remains easy
 // to replace with fixture runners in tests.
 func installDSH(path, dshVersion string) (installReport, error) {
-	report, err := install.EnsureDSHBaseline(path, install.DSHOptions{AdapterCommand: "baron hook dsh", Version: dshVersion})
+	report, _, err := installDSHWithChange(path, dshVersion)
 	return installReport{Components: report.Components}, err
+}
+
+func installDSHWithChange(path, dshVersion string) (install.DSHReport, bool, error) {
+	report, changed, err := install.EnsureDSHBaselineWithChange(path, install.DSHOptions{AdapterCommand: "baron hook dsh", Version: dshVersion})
+	return report, changed, err
+}
+
+func mergeCodexWithChange(path string) (bool, error) {
+	return install.MergeCodexHooksWithChange(path, "baron")
 }
 
 func mergeCodex(path string) error { return install.MergeCodexHooks(path, "baron") }

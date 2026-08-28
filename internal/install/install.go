@@ -1,6 +1,7 @@
 package install
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,17 +29,22 @@ const baronDSHProfilePatchBlock = `# baron-owned: ddg-search
 `
 
 func MergeCodexHooks(path, binary string) error {
+	_, err := MergeCodexHooksWithChange(path, binary)
+	return err
+}
+
+func MergeCodexHooksWithChange(path, binary string) (bool, error) {
 	if binary == "" {
 		binary = "baron"
 	}
+	original, originalErr := os.ReadFile(path)
+	if originalErr != nil && !errors.Is(originalErr, os.ErrNotExist) {
+		return false, originalErr
+	}
+	existed := originalErr == nil
 	root, err := readJSONMap(path)
 	if err != nil {
-		return err
-	}
-	if _, err := os.Stat(path); err == nil {
-		if err := backupBeforeEdit(path); err != nil {
-			return err
-		}
+		return false, err
 	}
 	hooks, ok := root["hooks"].(map[string]any)
 	if !ok {
@@ -80,7 +86,23 @@ func MergeCodexHooks(path, binary string) error {
 		}
 		hooks[event] = items
 	}
-	return writeJSONMap(path, root, 0o600)
+	data, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	data = append(data, '\n')
+	if existed && bytes.Equal(original, data) {
+		return false, nil
+	}
+	if existed {
+		if err := backupBeforeEdit(path); err != nil {
+			return false, err
+		}
+	}
+	if err := config.AtomicWriteFile(path, data, 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RemoveCodexHooks removes only Baron lifecycle hook entries and preserves
@@ -232,29 +254,30 @@ func DSHProfilePatchPath(profile string) (string, error) {
 // DSH's official @deepseek-ai/dsh-mcp-client patch shape. It preserves all
 // unrelated YAML and recognizes an existing user-owned ddg-search entry.
 func EnsureDSHProfilePatch(path string) error {
+	_, err := EnsureDSHProfilePatchWithChange(path)
+	return err
+}
+
+func EnsureDSHProfilePatchWithChange(path string) (bool, error) {
 	if path == "" {
-		return errors.New("DSH profile patch path is required")
+		return false, errors.New("DSH profile patch path is required")
 	}
 	if info, err := os.Lstat(path); err == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return errors.New("refusing to edit DSH profile patch through a symlink or non-regular file")
+			return false, errors.New("refusing to edit DSH profile patch through a symlink or non-regular file")
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return false, err
 	}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+		return false, err
 	}
 	text := string(data)
 	if strings.Contains(text, "baron-owned: ddg-search") || strings.Contains(text, "serverName: 'ddg-search'") || strings.Contains(text, "serverName: \"ddg-search\"") {
-		return nil
+		return false, nil
 	}
-	if _, statErr := os.Stat(path); statErr == nil {
-		if err := backupBeforeEdit(path); err != nil {
-			return err
-		}
-	}
+	original := text
 	if text != "" && !strings.HasSuffix(text, "\n") {
 		text += "\n"
 	}
@@ -268,7 +291,18 @@ func EnsureDSHProfilePatch(path string) error {
 	if info, statErr := os.Stat(path); statErr == nil {
 		perm = info.Mode().Perm()
 	}
-	return config.AtomicWriteFile(path, []byte(text), perm)
+	if original == text {
+		return false, nil
+	}
+	if _, statErr := os.Stat(path); statErr == nil {
+		if err := backupBeforeEdit(path); err != nil {
+			return false, err
+		}
+	}
+	if err := config.AtomicWriteFile(path, []byte(text), perm); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RemoveDSHProfilePatch removes the Baron-owned marker block while preserving
@@ -347,6 +381,11 @@ func replaceEmptyDSHPatchSequence(text string) string {
 }
 
 func EnsureDSHBaseline(path string, options DSHOptions) (DSHReport, error) {
+	report, _, err := EnsureDSHBaselineWithChange(path, options)
+	return report, err
+}
+
+func EnsureDSHBaselineWithChange(path string, options DSHOptions) (DSHReport, bool, error) {
 	if options.AdapterCommand == "" {
 		options.AdapterCommand = "baron hook dsh"
 	}
@@ -355,12 +394,11 @@ func EnsureDSHBaseline(path string, options DSHOptions) (DSHReport, error) {
 	}
 	root, err := readJSONMap(path)
 	if err != nil {
-		return DSHReport{}, err
+		return DSHReport{}, false, err
 	}
-	if _, err := os.Stat(path); err == nil {
-		if err := backupBeforeEdit(path); err != nil {
-			return DSHReport{}, err
-		}
+	original, originalErr := os.ReadFile(path)
+	if originalErr != nil && !errors.Is(originalErr, os.ErrNotExist) {
+		return DSHReport{}, false, originalErr
 	}
 	plugins, _ := root["plugins"].([]any)
 	for _, name := range []string{"dsh-superpowers", "dsh-reverse-skill", "baron-dsh-adapter"} {
@@ -385,11 +423,24 @@ func EnsureDSHBaseline(path string, options DSHOptions) (DSHReport, error) {
 	baronFragment["dsh_version"] = options.Version
 	baronFragment["managed"] = true
 	root["baron"] = baronFragment
-	if err := writeJSONMap(path, root, 0o600); err != nil {
-		return DSHReport{}, err
+	data, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return DSHReport{}, false, err
+	}
+	data = append(data, '\n')
+	changed := originalErr != nil || !bytes.Equal(original, data)
+	if changed {
+		if originalErr == nil {
+			if err := backupBeforeEdit(path); err != nil {
+				return DSHReport{}, false, err
+			}
+		}
+		if err := config.AtomicWriteFile(path, data, 0o600); err != nil {
+			return DSHReport{}, false, err
+		}
 	}
 	components := []string{"duckduckgo-search", "dsh-superpowers", "dsh-reverse-skill", "baron-dsh-adapter"}
-	return DSHReport{Components: components, ActionRequired: "Configure the DeepSeek API key through the supported DSH credential flow."}, nil
+	return DSHReport{Components: components, ActionRequired: "Configure the DeepSeek API key through the supported DSH credential flow."}, changed, nil
 }
 
 func DSHComponents(path string) (map[string]bool, error) {
@@ -426,6 +477,21 @@ func WriteReceipt(path string, receipt Receipt) error {
 		return err
 	}
 	return config.AtomicWriteFile(path, append(data, '\n'), 0o600)
+}
+
+func WriteReceiptIfChanged(path string, receipt Receipt) (bool, error) {
+	if data, err := os.ReadFile(path); err == nil {
+		var existing Receipt
+		if json.Unmarshal(data, &existing) == nil && existing.Component == receipt.Component && existing.Version == receipt.Version && existing.Source == receipt.Source && existing.Checksum == receipt.Checksum {
+			return false, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	if err := WriteReceipt(path, receipt); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func LegacyCollision(path string) bool {

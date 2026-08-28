@@ -22,6 +22,33 @@ func (r *uninstallRunner) Run(_ context.Context, name string, args ...string) (s
 	return "", nil
 }
 
+type fullPurgeRunner struct {
+	calls []string
+}
+
+func (r *fullPurgeRunner) LookPath(name string) (string, error) {
+	return "/fake/" + name, nil
+}
+
+func (r *fullPurgeRunner) Run(_ context.Context, name string, args ...string) (string, error) {
+	call := name + " " + strings.Join(args, " ")
+	r.calls = append(r.calls, call)
+	switch {
+	case name == "dpkg-query":
+		return "installed", nil
+	case call == "docker ps -aq":
+		return "container-1\n", nil
+	case call == "docker volume ls -q":
+		return "volume-1\n", nil
+	case call == "docker images -aq":
+		return "image-1\n", nil
+	case call == "docker network ls --filter type=custom -q":
+		return "network-1\n", nil
+	default:
+		return "", nil
+	}
+}
+
 func TestExecuteRemovesBaronResourcesAndPreservesSharedHomes(t *testing.T) {
 	root := t.TempDir()
 	globalDir := filepath.Join(root, "config")
@@ -203,6 +230,149 @@ func TestExecutePurgeSharedIsIdempotent(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("purged shared home remains %s: %v", path, err)
 		}
+	}
+}
+
+func TestExecuteFullPurgeRemovesKnownRuntimeAndHostState(t *testing.T) {
+	root := t.TempDir()
+	globalPath := filepath.Join(root, ".config", "baron", "global.json")
+	dshHome := filepath.Join(root, "dsh")
+	codexHome := filepath.Join(root, "codex")
+	source := filepath.Join(root, "Baron-Nexus")
+	environmentFile := filepath.Join(root, ".bashrc")
+	for _, path := range []string{
+		globalPath,
+		filepath.Join(dshHome, ".credentials.yaml"),
+		filepath.Join(codexHome, "auth.json"),
+		filepath.Join(root, ".npm", "cache"),
+		filepath.Join(root, ".cache", "uv", "cache.db"),
+		filepath.Join(root, ".local", "share", "pnpm", "store"),
+		filepath.Join(root, ".local", "bin", "uv"),
+		filepath.Join(root, ".local", "bin", "uvx"),
+	} {
+		if strings.HasSuffix(path, "cache") || strings.HasSuffix(path, "store") {
+			if err := os.MkdirAll(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("baron"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(source, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".git", "config"), []byte("[remote \"origin\"]\n\turl = https://github.com/thienty1207/Baron-Nexus.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("Baron"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environmentFile, []byte("export DEEPSEEK_API_KEY=secret\nexport BARON_TENCENT_ADMIN_KEY=secret\nexport KEEP_ME=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &fullPurgeRunner{}
+	_, err := Execute(context.Background(), Options{
+		GlobalPath:       globalPath,
+		DSHHome:          dshHome,
+		CodexHome:        codexHome,
+		HomeDir:          root,
+		SourceCheckouts:  []string{source},
+		EnvironmentFiles: []string{environmentFile},
+		Runner:           runner,
+		PurgeAll:         true,
+		GOOS:             "linux",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{globalPath, dshHome, codexHome, filepath.Join(root, ".config", "baron"), filepath.Join(root, ".npm"), filepath.Join(root, ".cache", "uv"), filepath.Join(root, ".local", "share", "pnpm"), source} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("full purge left runtime state %s: %v", path, err)
+		}
+	}
+	environment, err := os.ReadFile(environmentFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(environment), "DEEPSEEK_API_KEY") || strings.Contains(string(environment), "BARON_TENCENT_ADMIN_KEY") || !strings.Contains(string(environment), "KEEP_ME") {
+		t.Fatalf("full purge did not scrub known secrets selectively: %s", environment)
+	}
+	joined := strings.Join(runner.calls, "\n")
+	for _, want := range []string{
+		"npm uninstall --global @deepseek-ai/dsh @openai/codex pnpm",
+		"docker system prune -a --volumes --force",
+		"sudo -n apt-get purge -y",
+		"sudo -n apt-get autoremove --purge -y",
+		"sudo -n rm -rf -- /var/lib/docker",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("full purge did not run %q: %#v", want, runner.calls)
+		}
+	}
+}
+
+func TestResolvePurgeHomeAllowsActualUserHomeAnchor(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolvePurgeHome(Options{HomeDir: home})
+	if err != nil {
+		t.Fatalf("user home was rejected as a purge anchor: %v", err)
+	}
+	if !samePath(got, home) {
+		t.Fatalf("purge home=%q, want %q", got, home)
+	}
+}
+
+func TestBuildPlanRejectsUnverifiedSourceCheckout(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "Baron-Nexus")
+	if err := os.MkdirAll(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildPlan(Options{
+		GlobalPath:      filepath.Join(root, "config", "global.json"),
+		HomeDir:         root,
+		SourceCheckouts: []string{source},
+		PurgeAll:        true,
+	}); err == nil {
+		t.Fatal("unverified source checkout was accepted for recursive deletion")
+	}
+}
+
+func TestDiscoverBaronSourceCheckoutAcceptsSSHRemote(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "Baron-Nexus")
+	if err := os.MkdirAll(filepath.Join(source, ".git"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".git", "config"), []byte("[remote \"origin\"]\n\turl = git@github.com:thienty1207/Baron-Nexus.git\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "README.md"), []byte("Baron"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := DiscoverBaronSourceCheckouts(root)
+	if len(got) != 1 || !samePath(got[0], source) {
+		t.Fatalf("SSH Baron checkout was not discovered: %#v", got)
+	}
+}
+
+func TestScrubSensitiveEnvironmentSupportsShellSyntaxes(t *testing.T) {
+	input := []byte("set -gx DEEPSEEK_API_KEY secret\n$env:OPENAI_API_KEY = 'secret'\nsetx BARON_TENCENT_ADMIN_KEY secret\nKEEP_ME=1\n")
+	got, changed := scrubSensitiveEnvironment(input)
+	if !changed {
+		t.Fatal("sensitive environment entries were not detected")
+	}
+	if strings.Contains(string(got), "DEEPSEEK_API_KEY") || strings.Contains(string(got), "OPENAI_API_KEY") || strings.Contains(string(got), "BARON_TENCENT_ADMIN_KEY") || !strings.Contains(string(got), "KEEP_ME=1") {
+		t.Fatalf("sensitive environment entries were not scrubbed selectively: %s", got)
 	}
 }
 

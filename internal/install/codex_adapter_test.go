@@ -42,6 +42,18 @@ func TestInstallEmbeddedCodexAdapterMaterializesPrivateBridge(t *testing.T) {
 	}
 }
 
+func TestInstallEmbeddedCodexAdapterReportsOnlyFirstMaterializationAsChanged(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "codex-adapter")
+	changed, err := InstallEmbeddedCodexAdapterWithChange(target)
+	if err != nil || !changed {
+		t.Fatalf("first adapter materialization changed=%v err=%v", changed, err)
+	}
+	changed, err = InstallEmbeddedCodexAdapterWithChange(target)
+	if err != nil || changed {
+		t.Fatalf("identical adapter materialization changed=%v err=%v", changed, err)
+	}
+}
+
 func TestInstallEmbeddedCodexAdapterRejectsUnsafeTarget(t *testing.T) {
 	link := filepath.Join(t.TempDir(), "codex-adapter")
 	target := filepath.Join(t.TempDir(), "real")

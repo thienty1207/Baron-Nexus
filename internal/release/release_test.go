@@ -98,14 +98,79 @@ func TestInstallLatestIsIdempotentWhenCurrentVersionMatches(t *testing.T) {
 	sums := checksumLine(candidate, "baron-linux-amd64") + "\n" + checksumLine(manifest, "release-manifest.json") + "\n"
 	server := releaseFixtureServer(t, candidate, manifest, []byte(sums))
 	defer server.Close()
+	target := filepath.Join(t.TempDir(), "baron")
+	if err := os.WriteFile(target, []byte("current Baron binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
-	report, err := client.InstallLatest(context.Background(), filepath.Join(t.TempDir(), "baron"), "0.1.0", false)
+	report, err := client.InstallLatest(context.Background(), target, "0.1.0", false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if report.Changed || report.Version != "0.1.0" {
 		t.Fatalf("expected no-op report, got %#v", report)
 	}
+}
+
+func TestInstallLatestDoesNotSkipMissingTargetWhenVersionMatches(t *testing.T) {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
+		t.Skip("fixture candidate is a Linux amd64 executable")
+	}
+	candidate := []byte("#!/bin/sh\necho 'baron 0.1.0'\n")
+	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.0","artifacts":["baron-linux-amd64"]}`)
+	sums := checksumLine(candidate, "baron-linux-amd64") + "\n" + checksumLine(manifest, "release-manifest.json") + "\n"
+	server := releaseFixtureServer(t, candidate, manifest, []byte(sums))
+	defer server.Close()
+	target := filepath.Join(t.TempDir(), "bin", "baron")
+	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
+	report, err := client.InstallLatest(context.Background(), target, "0.1.0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Changed {
+		t.Fatalf("missing target was incorrectly treated as a no-op: %#v", report)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("missing target was not installed: %v", err)
+	}
+}
+
+func TestInstallLatestEqualVersionOnlyFetchesReleaseMetadata(t *testing.T) {
+	counts := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts[r.URL.Path]++
+		if r.URL.Path != "/repos/owner/repo/releases/latest" {
+			http.Error(w, "unexpected binary work", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": "v0.1.0", "assets": []map[string]string{
+			{"name": "baron-linux-amd64", "browser_download_url": serverURL(r, "/download/baron-linux-amd64")},
+			{"name": "release-manifest.json", "browser_download_url": serverURL(r, "/download/release-manifest.json")},
+			{"name": "SHA256SUMS", "browser_download_url": serverURL(r, "/download/SHA256SUMS")},
+		}})
+	}))
+	defer server.Close()
+	target := filepath.Join(t.TempDir(), "baron")
+	if err := os.WriteFile(target, []byte("current Baron binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
+	report, err := client.InstallLatest(context.Background(), target, "0.1.0", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Changed || counts["/repos/owner/repo/releases/latest"] != 1 {
+		t.Fatalf("unexpected no-op report/counts: %#v %#v", report, counts)
+	}
+	for path, count := range counts {
+		if path != "/repos/owner/repo/releases/latest" && count != 0 {
+			t.Fatalf("equal release fetched mutation asset %s %d times", path, count)
+		}
+	}
+}
+
+func serverURL(r *http.Request, path string) string {
+	return "http://" + r.Host + path
 }
 
 func TestInstallLatestRejectsChecksumMismatchBeforeMutation(t *testing.T) {

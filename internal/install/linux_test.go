@@ -3,8 +3,10 @@ package install
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -109,6 +111,46 @@ func TestHTTPFileDownloaderReportsDownloadProgress(t *testing.T) {
 	}
 }
 
+func TestHTTPFileDownloaderUsesInjectedReusableClient(t *testing.T) {
+	transport := &countingRoundTripper{}
+	downloader := httpFileDownloader{Client: &http.Client{Transport: transport}}
+	for index := 0; index < 2; index++ {
+		if err := downloader.Download(context.Background(), "https://example.test/input", filepath.Join(t.TempDir(), fmt.Sprintf("file-%d", index))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if transport.calls != 2 {
+		t.Fatalf("injected transport calls=%d, want 2", transport.calls)
+	}
+}
+
+func TestConfiguredHTTPClientRaisesWeakTLSMinimum(t *testing.T) {
+	base := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS10}}}
+	configured := configuredHTTPClient(base)
+	transport, ok := configured.Transport.(*http.Transport)
+	if !ok || transport.TLSClientConfig == nil || transport.TLSClientConfig.MinVersion < tls.VersionTLS12 {
+		t.Fatalf("configured TLS minimum=%v, want at least TLS 1.2", transport.TLSClientConfig)
+	}
+	if base.Transport.(*http.Transport).TLSClientConfig.MinVersion != tls.VersionTLS10 {
+		t.Fatal("configured client mutated caller-owned TLS settings")
+	}
+}
+
+type countingRoundTripper struct {
+	calls int
+}
+
+func (r *countingRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	r.calls++
+	return &http.Response{
+		StatusCode:    http.StatusOK,
+		Body:          io.NopCloser(strings.NewReader("ok")),
+		ContentLength: 2,
+		Header:        make(http.Header),
+		Request:       request,
+	}, nil
+}
+
 func TestEnsureDockerRejectsUnsupportedDistributionBeforeNetwork(t *testing.T) {
 	fixture := &dockerBootstrapFixture{available: map[string]bool{"sudo": true}}
 	_, err := EnsureDocker(context.Background(), fixture, DockerBootstrapOptions{
@@ -167,12 +209,15 @@ func TestEnsureDockerUsesOfficialAptPathWithoutDockerGroupMutation(t *testing.T)
 
 func TestEnsureDockerRefreshesHealthyDaemonWhenRequested(t *testing.T) {
 	fixture := &dockerBootstrapFixture{
-		available: map[string]bool{"sudo": true, "docker": true, "systemctl": true},
+		available: map[string]bool{"sudo": true, "docker": true, "systemctl": true, "dpkg-query": true, "apt-cache": true},
 		outputs: map[string]string{
 			"docker info":         "ready",
 			"sudo -n true":        "",
 			"sudo -n docker info": "ready",
 		},
+	}
+	for call, output := range dockerPackageStateOutputs("1.0", "2.0") {
+		fixture.outputs[call] = output
 	}
 	report, err := EnsureDocker(context.Background(), fixture, DockerBootstrapOptions{
 		GOOS:          "linux",
@@ -194,6 +239,115 @@ func TestEnsureDockerRefreshesHealthyDaemonWhenRequested(t *testing.T) {
 	if !strings.Contains(joined, "sudo -n apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin") {
 		t.Fatalf("healthy Docker refresh did not install latest official package set: %#v", fixture.calls)
 	}
+}
+
+func TestEnsureDockerSkipsHealthyDaemonWhenPackageCandidatesMatch(t *testing.T) {
+	fixture := &dockerBootstrapFixture{
+		available: map[string]bool{"sudo": true, "docker": true, "dpkg-query": true, "apt-cache": true},
+		outputs: map[string]string{
+			"docker info":         "ready",
+			"sudo -n true":        "",
+			"sudo -n docker info": "ready",
+		},
+	}
+	for call, output := range dockerPackageStateOutputs("2.0", "2.0") {
+		fixture.outputs[call] = output
+	}
+	report, err := EnsureDocker(context.Background(), fixture, DockerBootstrapOptions{
+		GOOS:          "linux",
+		GOARCH:        "amd64",
+		OSReleasePath: writeOSRelease(t, "ID=ubuntu\nVERSION_ID=26.04\nUBUNTU_CODENAME=resolute\n"),
+		Downloader:    fixture,
+		Refresh:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Ready || report.Installed {
+		t.Fatalf("current healthy Docker was not a no-op: %#v", report)
+	}
+	if len(fixture.downloads) != 0 || fixture.aptUpdates != 1 || strings.Contains(strings.Join(fixture.calls, "\n"), "apt-get install") || strings.Contains(strings.Join(fixture.calls, "\n"), "systemctl") {
+		t.Fatalf("current healthy Docker performed package/daemon mutation: downloads=%#v apt_updates=%d calls=%#v", fixture.downloads, fixture.aptUpdates, fixture.calls)
+	}
+}
+
+func TestEnsureDockerFailsClosedWhenPackageMetadataIsUnavailable(t *testing.T) {
+	fixture := &dockerBootstrapFixture{
+		available: map[string]bool{"sudo": true, "docker": true, "dpkg-query": true},
+		outputs: map[string]string{
+			"docker info":  "ready",
+			"sudo -n true": "",
+		},
+	}
+	_, err := EnsureDocker(context.Background(), fixture, DockerBootstrapOptions{
+		GOOS:          "linux",
+		GOARCH:        "amd64",
+		OSReleasePath: writeOSRelease(t, "ID=ubuntu\nVERSION_ID=26.04\nUBUNTU_CODENAME=resolute\n"),
+		Downloader:    fixture,
+		Refresh:       true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "latest Docker package state is unknown") {
+		t.Fatalf("unavailable Docker metadata was not rejected: %v", err)
+	}
+	joined := strings.Join(fixture.calls, "\n")
+	if len(fixture.downloads) != 0 || strings.Contains(joined, "apt-get install") {
+		t.Fatalf("unknown Docker metadata triggered mutation: downloads=%#v calls=%#v", fixture.downloads, fixture.calls)
+	}
+}
+
+func TestEnsureDockerInstallsOnlyStalePackages(t *testing.T) {
+	fixture := &dockerBootstrapFixture{
+		available: map[string]bool{"sudo": true, "docker": true, "systemctl": true, "dpkg-query": true, "apt-cache": true},
+		outputs: map[string]string{
+			"docker info":         "ready",
+			"sudo -n true":        "",
+			"sudo -n docker info": "ready",
+		},
+	}
+	for call, output := range dockerPackageStateOutputs("2.0", "2.0") {
+		fixture.outputs[call] = output
+	}
+	fixture.outputs["dpkg-query -W -f=${Version} docker-ce"] = "1.0"
+	report, err := EnsureDocker(context.Background(), fixture, DockerBootstrapOptions{
+		GOOS:          "linux",
+		GOARCH:        "amd64",
+		OSReleasePath: writeOSRelease(t, "ID=ubuntu\nVERSION_ID=26.04\nUBUNTU_CODENAME=resolute\n"),
+		Downloader:    fixture,
+		Refresh:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Installed {
+		t.Fatalf("stale Docker package was not refreshed: %#v", report)
+	}
+	joined := strings.Join(fixture.calls, "\n")
+	if !strings.Contains(joined, "sudo -n apt-get install -y docker-ce") {
+		t.Fatalf("stale package was not selected: %#v", fixture.calls)
+	}
+	if strings.Contains(joined, "docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin") {
+		t.Fatalf("current Docker packages were reinstalled: %#v", fixture.calls)
+	}
+}
+
+func TestDockerPackageStateRequiresOfficialCandidate(t *testing.T) {
+	fixture := &dockerBootstrapFixture{available: map[string]bool{"dpkg-query": true, "apt-cache": true}, outputs: map[string]string{}}
+	for call, output := range dockerPackageStateOutputs("2.0", "2.0") {
+		fixture.outputs[call] = strings.ReplaceAll(output, "https://download.docker.com", "https://mirror.example.invalid")
+	}
+	known, current, stale := dockerPackagesCurrent(context.Background(), fixture)
+	if !known || current || len(stale) != len(dockerPackageNames) {
+		t.Fatalf("non-official candidate was accepted: known=%v current=%v stale=%#v", known, current, stale)
+	}
+}
+
+func dockerPackageStateOutputs(installed, candidate string) map[string]string {
+	outputs := map[string]string{}
+	for _, packageName := range []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"} {
+		outputs["dpkg-query -W -f=${Version} "+packageName] = installed
+		outputs["apt-cache policy "+packageName] = "  Installed: " + installed + "\n  Candidate: " + candidate + "\n  Version table:\n *** " + candidate + " 500\n        500 https://download.docker.com/linux/ubuntu stable/main amd64 Packages\n"
+	}
+	return outputs
 }
 
 func TestEnsureDockerRepairsStoppedDaemonWithSudo(t *testing.T) {

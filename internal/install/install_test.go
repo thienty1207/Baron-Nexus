@@ -205,7 +205,10 @@ func TestCodexHookInspectionSeparatesConfigurationFromInteractiveTrust(t *testin
 func TestInstallCodexUsesLatestOfficialPackageAndReportedVersion(t *testing.T) {
 	fixture := &codexInstallFixture{commandFixture: &commandFixture{
 		available: map[string]bool{"npm": true},
-		outputs:   map[string]string{"codex --version": "codex 0.150.0"},
+		outputs: map[string]string{
+			"codex --version":                "codex 0.150.0",
+			"npm view @openai/codex version": "0.150.0",
+		},
 	}}
 	source, err := InstallCodexWithSource(context.Background(), fixture, "latest")
 	if err != nil {
@@ -214,7 +217,7 @@ func TestInstallCodexUsesLatestOfficialPackageAndReportedVersion(t *testing.T) {
 	if source != "npm:@openai/codex" {
 		t.Fatalf("unexpected Codex install source: %s", source)
 	}
-	if len(fixture.calls) != 2 || fixture.calls[0] != "npm install --global @openai/codex@latest" || fixture.calls[1] != "codex --version" {
+	if len(fixture.calls) != 3 || fixture.calls[0] != "npm view @openai/codex version" || fixture.calls[1] != "npm install --global @openai/codex@0.150.0" || fixture.calls[2] != "codex --version" {
 		t.Fatalf("Codex installer did not use the latest official path: %#v", fixture.calls)
 	}
 }
@@ -222,7 +225,10 @@ func TestInstallCodexUsesLatestOfficialPackageAndReportedVersion(t *testing.T) {
 func TestInstallCodexWithVersionReportsLatestCommandVersion(t *testing.T) {
 	fixture := &codexInstallFixture{commandFixture: &commandFixture{
 		available: map[string]bool{"npm": true},
-		outputs:   map[string]string{"codex --version": "codex-cli 0.150.0"},
+		outputs: map[string]string{
+			"codex --version":                "codex-cli 0.150.0",
+			"npm view @openai/codex version": "0.150.0",
+		},
 	}}
 	_, version, err := InstallCodexWithVersion(context.Background(), fixture, "latest")
 	if err != nil {
@@ -234,10 +240,13 @@ func TestInstallCodexWithVersionReportsLatestCommandVersion(t *testing.T) {
 }
 
 func TestInstallCodexRefreshesExistingBinaryToLatest(t *testing.T) {
-	fixture := &commandFixture{
+	fixture := &codexInstallFixture{commandFixture: &commandFixture{
 		available: map[string]bool{"codex": true, "npm": true},
-		outputs:   map[string]string{"codex --version": "codex-cli 0.149.0"},
-	}
+		outputs: map[string]string{
+			"codex --version":                "codex-cli 0.149.0",
+			"npm view @openai/codex version": "0.150.0",
+		},
+	}, setVersionAfterInstall: true}
 	source, err := InstallCodexWithSource(context.Background(), fixture, "latest")
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +254,7 @@ func TestInstallCodexRefreshesExistingBinaryToLatest(t *testing.T) {
 	if source != "npm:@openai/codex" {
 		t.Fatalf("unexpected refreshed Codex source: %s", source)
 	}
-	if len(fixture.calls) != 2 || fixture.calls[0] != "npm install --global @openai/codex@latest" || fixture.calls[1] != "codex --version" {
+	if len(fixture.calls) != 4 || fixture.calls[0] != "codex --version" || fixture.calls[1] != "npm view @openai/codex version" || fixture.calls[2] != "npm install --global @openai/codex@0.150.0" || fixture.calls[3] != "codex --version" {
 		t.Fatalf("existing Codex was not refreshed to latest: %#v", fixture.calls)
 	}
 }
@@ -259,7 +268,7 @@ func TestInstallCodexFallsBackToSudoForRootOwnedGlobalNpmPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != "0.150.0" || len(fixture.calls) != 3 || fixture.calls[1] != "sudo -n npm install --global @openai/codex@latest" {
+	if version != "0.150.0" || len(fixture.calls) != 4 || fixture.calls[2] != "sudo -n npm install --global @openai/codex@0.150.0" {
 		t.Fatalf("unexpected sudo npm fallback=%q calls=%#v", version, fixture.calls)
 	}
 }
@@ -331,6 +340,19 @@ func TestReceiptDoesNotPersistSecretAndLegacyCollisionIsDetected(t *testing.T) {
 	}
 }
 
+func TestWriteReceiptIfChangedSkipsIdenticalReceipt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "receipt.json")
+	receipt := Receipt{Component: "codex-cli", Version: "0.150.0", Source: "npm:@openai/codex"}
+	changed, err := WriteReceiptIfChanged(path, receipt)
+	if err != nil || !changed {
+		t.Fatalf("first receipt write changed=%v err=%v", changed, err)
+	}
+	changed, err = WriteReceiptIfChanged(path, receipt)
+	if err != nil || changed {
+		t.Fatalf("identical receipt write changed=%v err=%v", changed, err)
+	}
+}
+
 func TestDSHProfilePatchPreservesUserRowsAndIsIdempotent(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "profiles", "web", "cordis.patch.yml")
@@ -356,6 +378,42 @@ func TestDSHProfilePatchPreservesUserRowsAndIsIdempotent(t *testing.T) {
 	}
 	if backups, _ := filepath.Glob(path + ".baron-backup-*"); len(backups) != 1 {
 		t.Fatalf("expected one backup before first edit, got %d", len(backups))
+	}
+}
+
+func TestDSHProfilePatchReportsOnlyActualChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cordis.patch.yml")
+	changed, err := EnsureDSHProfilePatchWithChange(path)
+	if err != nil || !changed {
+		t.Fatalf("first profile patch changed=%v err=%v", changed, err)
+	}
+	changed, err = EnsureDSHProfilePatchWithChange(path)
+	if err != nil || changed {
+		t.Fatalf("identical profile patch changed=%v err=%v", changed, err)
+	}
+}
+
+func TestMergeCodexHooksReportsOnlyActualChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	changed, err := MergeCodexHooksWithChange(path, "baron")
+	if err != nil || !changed {
+		t.Fatalf("first Codex hook merge changed=%v err=%v", changed, err)
+	}
+	changed, err = MergeCodexHooksWithChange(path, "baron")
+	if err != nil || changed {
+		t.Fatalf("identical Codex hook merge changed=%v err=%v", changed, err)
+	}
+}
+
+func TestEnsureDSHBaselineReportsOnlyActualChange(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "dsh.json")
+	_, changed, err := EnsureDSHBaselineWithChange(path, DSHOptions{AdapterCommand: "baron hook dsh", Version: "0.2.0"})
+	if err != nil || !changed {
+		t.Fatalf("first DSH baseline merge changed=%v err=%v", changed, err)
+	}
+	_, changed, err = EnsureDSHBaselineWithChange(path, DSHOptions{AdapterCommand: "baron hook dsh", Version: "0.2.0"})
+	if err != nil || changed {
+		t.Fatalf("identical DSH baseline merge changed=%v err=%v", changed, err)
 	}
 }
 

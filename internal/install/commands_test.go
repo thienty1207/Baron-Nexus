@@ -18,12 +18,16 @@ type commandFixture struct {
 
 type codexInstallFixture struct {
 	*commandFixture
+	setVersionAfterInstall bool
 }
 
 func (f *codexInstallFixture) Run(ctx context.Context, name string, args ...string) (string, error) {
 	output, err := f.commandFixture.Run(ctx, name, args...)
 	if err == nil && name == "npm" && len(args) >= 3 && args[0] == "install" && args[1] == "--global" && strings.HasPrefix(args[2], "@openai/codex@") {
 		f.available["codex"] = true
+		if f.setVersionAfterInstall {
+			f.outputs["codex --version"] = "codex-cli 0.150.0"
+		}
 	}
 	return output, err
 }
@@ -36,6 +40,14 @@ type npmGlobalPermissionFixture struct {
 func (f *npmGlobalPermissionFixture) Run(ctx context.Context, name string, args ...string) (string, error) {
 	call := name + " " + strings.Join(args, " ")
 	f.calls = append(f.calls, call)
+	if name == "npm" && len(args) == 3 && args[0] == "view" {
+		switch args[1] {
+		case "@deepseek-ai/dsh":
+			return "0.1.5", nil
+		case "@openai/codex":
+			return "0.150.0", nil
+		}
+	}
 	if name == "npm" && len(args) >= 3 && args[0] == "install" && args[1] == "--global" {
 		return "", errors.New("EACCES: permission denied, global npm prefix is root-owned")
 	}
@@ -93,23 +105,38 @@ func (f *commandFixture) Run(_ context.Context, name string, args ...string) (st
 }
 
 func TestInstallDSHDefaultsToLatestOfficialPackage(t *testing.T) {
-	fixture := &commandFixture{available: map[string]bool{"npm": true, "dsh": true}, outputs: map[string]string{"dsh --version": "dsh 0.2.0\n"}}
+	fixture := &commandFixture{available: map[string]bool{"npm": true, "dsh": true}, outputs: map[string]string{
+		"dsh --version":                     "dsh 0.2.0\n",
+		"npm view @deepseek-ai/dsh version": "0.2.0\n",
+	}}
 	if err := InstallDSH(context.Background(), fixture, ""); err != nil {
 		t.Fatal(err)
 	}
-	if len(fixture.calls) != 2 || !strings.Contains(fixture.calls[0], "@deepseek-ai/dsh@latest") || fixture.calls[1] != "dsh --version" {
+	if len(fixture.calls) != 2 || fixture.calls[0] != "dsh --version" || fixture.calls[1] != "npm view @deepseek-ai/dsh version" {
 		t.Fatalf("unexpected installer call: %#v", fixture.calls)
 	}
 }
 
 func TestInstallDSHWithVersionReportsLatestCommandVersion(t *testing.T) {
-	fixture := &commandFixture{available: map[string]bool{"npm": true, "dsh": true}, outputs: map[string]string{"dsh --version": "dsh 0.2.0\n"}}
+	fixture := &commandFixture{available: map[string]bool{"npm": true, "dsh": true}, outputs: map[string]string{
+		"dsh --version":                     "dsh 0.2.0\n",
+		"npm view @deepseek-ai/dsh version": "0.2.0\n",
+	}}
 	version, err := InstallDSHWithVersion(context.Background(), fixture, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if version != "0.2.0" {
 		t.Fatalf("reported DSH version=%q, want 0.2.0", version)
+	}
+}
+
+func TestInstallDSHWithVersionRejectsWrongExplicitVersion(t *testing.T) {
+	fixture := &commandFixture{available: map[string]bool{"npm": true, "dsh": true}, outputs: map[string]string{
+		"dsh --version": "dsh 0.2.0\n",
+	}}
+	if _, err := InstallDSHWithVersion(context.Background(), fixture, "0.1.0"); err == nil || !strings.Contains(err.Error(), "0.1.0") {
+		t.Fatalf("wrong explicit DSH version was accepted: %v", err)
 	}
 }
 
@@ -129,7 +156,7 @@ func TestInstallDSHFallsBackToSudoForRootOwnedGlobalNpmPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if version != "0.1.5" || len(fixture.calls) != 3 || fixture.calls[1] != "sudo -n npm install --global @deepseek-ai/dsh@latest" {
+	if version != "0.1.5" || len(fixture.calls) != 4 || fixture.calls[2] != "sudo -n npm install --global @deepseek-ai/dsh@0.1.5" {
 		t.Fatalf("unexpected sudo npm fallback=%q calls=%#v", version, fixture.calls)
 	}
 }
@@ -473,25 +500,153 @@ func TestTencentAdminKeyIsReadOnlyFromManagedDeployment(t *testing.T) {
 	}
 }
 
-func TestInstallDSHPluginsUsesLatestProfilePluginMechanism(t *testing.T) {
+func TestInstallDSHPluginsSkipsAlreadyConfiguredProfiles(t *testing.T) {
 	fixture := &commandFixture{
 		available: map[string]bool{"pnpm": true, "uvx": true, "dsh": true},
 		outputs: map[string]string{
-			"dsh --profile web --dump-config":      "superpowers-dsh\ndsh-reverse-skill\n",
-			"dsh --profile headless --dump-config": "superpowers-dsh\ndsh-reverse-skill\n",
+			"dsh --profile web --dump-config":      "superpowers-dsh\ndsh-reverse-skill\n@deepseek-ai/dsh-mcp-client\n",
+			"dsh --profile headless --dump-config": "superpowers-dsh\ndsh-reverse-skill\n@deepseek-ai/dsh-mcp-client\n",
 		},
 	}
 	if err := InstallDSHPlugins(context.Background(), fixture, ""); err != nil {
 		t.Fatal(err)
 	}
-	joined := strings.Join(fixture.calls, "\n")
-	for _, profile := range []string{"web", "headless"} {
-		for _, marker := range []string{"dsh plugin --profile " + profile + " add superpowers-dsh@latest", "dsh plugin --profile " + profile + " add https://github.com/dhicoc/dsh-reverse-skill.git", "dsh plugin --profile " + profile + " add @deepseek-ai/dsh-mcp-client@latest"} {
-			if !strings.Contains(joined, marker) {
-				t.Fatalf("missing latest DSH plugin operation %q in %#v", marker, fixture.calls)
-			}
+	if len(fixture.calls) != 2 || fixture.calls[0] != "dsh --profile web --dump-config" || fixture.calls[1] != "dsh --profile headless --dump-config" {
+		t.Fatalf("already configured profiles were mutated: %#v", fixture.calls)
+	}
+}
+
+func TestDSHProfileMarkerRequiresAPluginToken(t *testing.T) {
+	if DSHProfileHasMarker("user text: superpowers-dsh-disabled", "superpowers-dsh") {
+		t.Fatal("disabled plugin text was treated as an installed marker")
+	}
+	if DSHProfileHasMarker("adapter path: /tmp/baron-dsh-adapter-old", "baron-dsh-adapter") {
+		t.Fatal("unrelated adapter path was treated as the managed marker")
+	}
+	for _, test := range []struct {
+		dump   string
+		marker string
+	}{
+		{dump: "name: superpowers-dsh\n", marker: "superpowers-dsh"},
+		{dump: `"@deepseek-ai/dsh-mcp-client": {}`, marker: "dsh-mcp-client"},
+		{dump: "superpowers-dsh@1.2.3\n", marker: "superpowers-dsh"},
+	} {
+		if !DSHProfileHasMarker(test.dump, test.marker) {
+			t.Fatalf("valid marker %q was not found in %q", test.marker, test.dump)
 		}
 	}
+}
+
+func TestInstallDSHPluginsAddsOnlyMissingProfileEntries(t *testing.T) {
+	fixture := &profilePluginFixture{
+		dumps: map[string]string{
+			"web":      "superpowers-dsh\n",
+			"headless": "superpowers-dsh\ndsh-reverse-skill\ndsh-mcp-client\n",
+		},
+	}
+	report, err := InstallDSHPluginsWithReport(context.Background(), fixture, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Changed || len(fixture.adds) != 2 {
+		t.Fatalf("missing profile entries were not selectively added: report=%#v adds=%#v", report, fixture.adds)
+	}
+	for _, call := range fixture.adds {
+		if strings.Contains(call, "headless") {
+			t.Fatalf("complete profile was mutated: %#v", fixture.adds)
+		}
+	}
+}
+
+func TestInstallDSHPluginsUpdatesVersionedManagedNPMPlugin(t *testing.T) {
+	fixture := &versionedProfilePluginFixture{
+		dumps: map[string]string{
+			"web":      "superpowers-dsh 1.0.0\ndsh-reverse-skill\ndsh-mcp-client\n",
+			"headless": "superpowers-dsh\ndsh-reverse-skill\ndsh-mcp-client\n",
+		},
+		latest: map[string]string{"superpowers-dsh": "1.1.0"},
+	}
+	report, err := InstallDSHPluginsWithReport(context.Background(), fixture, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Changed || len(fixture.adds) != 1 || !strings.Contains(fixture.adds[0], "superpowers-dsh@1.1.0") {
+		t.Fatalf("versioned stale plugin was not updated exactly: report=%#v adds=%#v", report, fixture.adds)
+	}
+}
+
+type profilePluginFixture struct {
+	dumps map[string]string
+	adds  []string
+}
+
+type versionedProfilePluginFixture struct {
+	dumps  map[string]string
+	latest map[string]string
+	adds   []string
+}
+
+func (f *versionedProfilePluginFixture) LookPath(name string) (string, error) {
+	if name == "pnpm" || name == "uvx" || name == "npm" {
+		return "/fake/" + name, nil
+	}
+	return "", errCommandMissing
+}
+
+func (f *versionedProfilePluginFixture) Run(_ context.Context, name string, args ...string) (string, error) {
+	call := name + " " + strings.Join(args, " ")
+	if name == "npm" && len(args) == 3 && args[0] == "view" {
+		if version, ok := f.latest[args[1]]; ok {
+			return version, nil
+		}
+		return "", errors.New("unexpected npm package")
+	}
+	if name != "dsh" {
+		return "", errors.New("unexpected command")
+	}
+	if len(args) == 3 && args[0] == "--profile" && args[2] == "--dump-config" {
+		return f.dumps[args[1]], nil
+	}
+	if len(args) == 5 && args[0] == "plugin" && args[1] == "--profile" && args[3] == "add" {
+		f.adds = append(f.adds, call)
+		if strings.Contains(args[4], "superpowers-dsh@1.1.0") {
+			f.dumps[args[2]] = "superpowers-dsh 1.1.0\ndsh-reverse-skill\ndsh-mcp-client\n"
+		}
+		return "", nil
+	}
+	return "", errors.New("unexpected DSH command")
+}
+
+func (f *profilePluginFixture) LookPath(name string) (string, error) {
+	if name == "pnpm" || name == "uvx" {
+		return "/fake/" + name, nil
+	}
+	return "", errCommandMissing
+}
+
+func (f *profilePluginFixture) Run(_ context.Context, name string, args ...string) (string, error) {
+	call := name + " " + strings.Join(args, " ")
+	if name != "dsh" {
+		return "", errors.New("unexpected command")
+	}
+	if len(args) == 3 && args[0] == "--profile" && args[2] == "--dump-config" {
+		return f.dumps[args[1]], nil
+	}
+	if len(args) == 5 && args[0] == "plugin" && args[1] == "--profile" && args[3] == "add" {
+		f.adds = append(f.adds, call)
+		profile := args[2]
+		if strings.Contains(args[4], "superpowers-dsh") {
+			f.dumps[profile] += "superpowers-dsh\n"
+		}
+		if strings.Contains(args[4], "reverse-skill") {
+			f.dumps[profile] += "dsh-reverse-skill\n"
+		}
+		if strings.Contains(args[4], "mcp-client") {
+			f.dumps[profile] += "dsh-mcp-client\n"
+		}
+		return "", nil
+	}
+	return "", errors.New("unexpected DSH command")
 }
 
 var errCommandMissing = &commandError{}

@@ -344,7 +344,7 @@ else
       RELEASE_TAG=v$RELEASE_VERSION
       BASE_URL="https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG"
       ;;
-    *) printf '%s\n' 'BARON_RELEASE_VERSION must be latest or a semantic version such as 0.1.8.' >&2; exit 2 ;;
+    *) printf '%s\n' 'BARON_RELEASE_VERSION must be latest or a semantic version such as 0.1.9.' >&2; exit 2 ;;
   esac
   case "$(uname -s):$(uname -m)" in
     Linux:x86_64|Linux:amd64) ASSET=baron-linux-amd64 ;;

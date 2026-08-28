@@ -87,8 +87,17 @@ func (c Client) InstallLatest(ctx context.Context, target, currentVersion string
 		return Report{}, err
 	}
 	if !force && strings.TrimSpace(currentVersion) == tagVersion {
-		c.step("Baron is already up to date.")
-		return Report{Version: tagVersion, Target: target, Changed: false}, nil
+		info, statErr := os.Stat(target)
+		if statErr == nil {
+			if !info.Mode().IsRegular() {
+				return Report{}, fmt.Errorf("Baron install target is not a regular file: %s", target)
+			}
+			c.step(fmt.Sprintf("Baron %s is already up to date.", tagVersion))
+			return Report{Version: tagVersion, Target: target, Changed: false}, nil
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return Report{}, fmt.Errorf("inspect Baron install target: %w", statErr)
+		}
 	}
 
 	assets := make(map[string]string, len(release.Assets))

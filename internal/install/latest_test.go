@@ -88,6 +88,25 @@ func TestEnsureUVChecksumFailureReportsNonSecretDigests(t *testing.T) {
 	}
 }
 
+func TestEnsureUVSkipsArchiveWhenLocalVersionsMatchLatest(t *testing.T) {
+	runner := &commandFixture{available: map[string]bool{"uv": true, "uvx": true}, outputs: map[string]string{
+		"uv --version":  "uv 0.12.6",
+		"uvx --version": "uvx 0.12.6",
+	}}
+	downloader := &latestUVDownloadFixture{metadataTag: "v0.12.6", runner: runner}
+	if changed, err := ensureUV(context.Background(), runner, downloader, "amd64", t.TempDir()); err != nil {
+		t.Fatal(err)
+	} else if changed {
+		t.Fatal("matching uv/uvx versions were reported as changed")
+	}
+	if downloader.archiveDownloads != 0 || downloader.checksumDownloads != 0 {
+		t.Fatalf("matching uv versions triggered release downloads: archive=%d checksum=%d", downloader.archiveDownloads, downloader.checksumDownloads)
+	}
+	if len(downloader.urls) != 1 || downloader.urls[0] != uvReleaseAPIURL {
+		t.Fatalf("unexpected uv discovery URLs: %#v", downloader.urls)
+	}
+}
+
 type nodeIndexDownloadFixture struct {
 	data []byte
 }
@@ -122,6 +141,19 @@ type latestHostDownloadFixture struct {
 	runner  *commandFixture
 }
 
+type nodeInstallFixture struct {
+	*commandFixture
+	postNodeVersion string
+}
+
+func (f *nodeInstallFixture) Run(ctx context.Context, name string, args ...string) (string, error) {
+	output, err := f.commandFixture.Run(ctx, name, args...)
+	if err == nil && name == "sudo" && strings.Join(args, " ") == "-n apt-get install -y nodejs" {
+		f.outputs["node --version"] = f.postNodeVersion
+	}
+	return output, err
+}
+
 func (f *latestHostDownloadFixture) Download(_ context.Context, rawURL, destination string) error {
 	f.urls = append(f.urls, rawURL)
 	var data []byte
@@ -151,19 +183,68 @@ func TestEnsureHostToolchainRefreshesExistingDependenciesToLatest(t *testing.T) 
 	}
 	archive := uvTestArchive(t)
 	digest := sha256.Sum256(archive)
-	runner := &commandFixture{available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true}}
-	runner.outputs = map[string]string{"node --version": "v26.8.1\n"}
+	runner := &commandFixture{available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true, "uv": true, "uvx": true}}
+	runner.outputs = map[string]string{
+		"node --version":        "v26.8.1\n",
+		"pnpm --version":        "9.15.0\n",
+		"npm view pnpm version": "9.15.0\n",
+		"uv --version":          "uv 0.12.6\n",
+		"uvx --version":         "uvx 0.12.6\n",
+	}
 	downloader := &latestHostDownloadFixture{archive: archive, digest: hex.EncodeToString(digest[:]), runner: runner}
 	if _, err := EnsureHostToolchain(context.Background(), runner, HostToolchainOptions{GOOS: "linux", GOARCH: "amd64", OSReleasePath: osRelease, Home: t.TempDir(), Downloader: downloader}); err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(runner.calls, "\n")
-	for _, want := range []string{"sudo -n apt-get install -y nodejs", "sudo -n npm install --global pnpm@latest"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("latest host refresh missing %q in calls:\n%s", want, joined)
+	for _, forbidden := range []string{"apt-get install -y nodejs", "npm install --global pnpm@", "apt-get update"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("latest host no-op performed %q in calls:\n%s", forbidden, joined)
 		}
 	}
-	if !strings.Contains(strings.Join(downloader.urls, "\n"), "/releases/download/0.12.6/") {
-		t.Fatalf("latest uv release tag missing from downloads: %#v", downloader.urls)
+	if strings.Contains(strings.Join(downloader.urls, "\n"), "/releases/download/") {
+		t.Fatalf("latest host no-op downloaded uv archive: %#v", downloader.urls)
+	}
+}
+
+func TestEnsureHostToolchainUpdatesNodeWhenPatchVersionIsStale(t *testing.T) {
+	osRelease := t.TempDir() + "/os-release"
+	if err := os.WriteFile(osRelease, []byte("ID=ubuntu\nVERSION_ID=26.04\nVERSION_CODENAME=questing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive := uvTestArchive(t)
+	digest := sha256.Sum256(archive)
+	runner := &nodeInstallFixture{commandFixture: &commandFixture{available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true, "uv": true, "uvx": true}, outputs: map[string]string{
+		"node --version":        "v26.7.0\n",
+		"pnpm --version":        "9.15.0\n",
+		"npm view pnpm version": "9.15.0\n",
+		"uv --version":          "uv 0.12.6\n",
+		"uvx --version":         "uvx 0.12.6\n",
+	}}, postNodeVersion: "v26.8.1\n"}
+	downloader := &latestHostDownloadFixture{archive: archive, digest: hex.EncodeToString(digest[:]), runner: runner.commandFixture}
+	if _, err := EnsureHostToolchain(context.Background(), runner, HostToolchainOptions{GOOS: "linux", GOARCH: "amd64", OSReleasePath: osRelease, Home: t.TempDir(), Downloader: downloader}); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCall(runner.calls, "sudo -n apt-get install -y nodejs") {
+		t.Fatalf("stale Node patch version was not updated: %#v", runner.calls)
+	}
+}
+
+func TestEnsureHostToolchainRejectsNodeThatMissedResolvedRelease(t *testing.T) {
+	osRelease := t.TempDir() + "/os-release"
+	if err := os.WriteFile(osRelease, []byte("ID=ubuntu\nVERSION_ID=26.04\nVERSION_CODENAME=questing\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &nodeInstallFixture{commandFixture: &commandFixture{available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true, "uv": true, "uvx": true}, outputs: map[string]string{
+		"node --version":        "v26.7.0\n",
+		"pnpm --version":        "9.15.0\n",
+		"npm view pnpm version": "9.15.0\n",
+		"uv --version":          "uv 0.12.6\n",
+		"uvx --version":         "uvx 0.12.6\n",
+	}}, postNodeVersion: "v26.7.1\n"}
+	archive := uvTestArchive(t)
+	digest := sha256.Sum256(archive)
+	downloader := &latestHostDownloadFixture{archive: archive, digest: hex.EncodeToString(digest[:]), runner: runner.commandFixture}
+	if _, err := EnsureHostToolchain(context.Background(), runner, HostToolchainOptions{GOOS: "linux", GOARCH: "amd64", OSReleasePath: osRelease, Home: t.TempDir(), Downloader: downloader}); err == nil || !strings.Contains(err.Error(), "26.8.1") {
+		t.Fatalf("Node install that missed latest release was accepted: %v", err)
 	}
 }

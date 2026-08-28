@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 )
 
 type CommandRunner interface {
@@ -24,15 +25,29 @@ func InstallDSH(ctx context.Context, runner CommandRunner, version string) error
 	return err
 }
 
+func InstallDSHLatestWithReport(ctx context.Context, runner CommandRunner, reporters ...ProgressReporter) (DependencyReport, error) {
+	return EnsureNPMDependencyLatest(ctx, runner, NPMDependencySpec{
+		Name: "DSH", Package: "@deepseek-ai/dsh", Command: "dsh",
+	}, reporters...)
+}
+
 func InstallDSHWithVersion(ctx context.Context, runner CommandRunner, version string) (string, error) {
 	if runner == nil {
 		return "", errors.New("Node/npm runner is not configured")
 	}
+	if version == "" || version == LatestDependencySelector {
+		report, err := InstallDSHLatestWithReport(ctx, runner)
+		if err != nil {
+			return "", err
+		}
+		return report.State.LocalVersion, nil
+	}
 	if _, err := runner.LookPath("npm"); err != nil {
 		return "", errors.New("Node/npm is required for DeepSeek Harness initialization")
 	}
-	if version == "" {
-		version = LatestDependencySelector
+	expectedVersion, err := NormalizeVersion(version)
+	if err != nil {
+		return "", fmt.Errorf("invalid DSH version %q: %w", version, err)
 	}
 	if err := installGlobalNPM(ctx, runner, "@deepseek-ai/dsh@"+version); err != nil {
 		return "", fmt.Errorf("install @deepseek-ai/dsh@%s: %w", version, err)
@@ -48,44 +63,135 @@ func InstallDSHWithVersion(ctx context.Context, runner CommandRunner, version st
 	if reported == "" {
 		return "", errors.New("verify dsh installation: dsh did not report a semantic version")
 	}
+	if reported != expectedVersion {
+		return "", fmt.Errorf("verify dsh installation: expected version %s", expectedVersion)
+	}
 	return reported, nil
+}
+
+// DSHPluginReport describes whether Baron had to change any managed profile.
+type DSHPluginReport struct {
+	Changed bool
 }
 
 // InstallDSHPlugins uses the upstream DSH plugin mechanism. Direct npm
 // installation would leave packages as ordinary dependencies and would not
 // activate their profile bundles.
-func InstallDSHPlugins(ctx context.Context, runner CommandRunner, _ string) error {
+func InstallDSHPlugins(ctx context.Context, runner CommandRunner, version string) error {
+	_, err := InstallDSHPluginsWithReport(ctx, runner, version)
+	return err
+}
+
+func InstallDSHPluginsWithReport(ctx context.Context, runner CommandRunner, _ string, reporters ...ProgressReporter) (DSHPluginReport, error) {
+	reporter := firstProgressReporter(reporters...)
 	if runner == nil {
-		return errors.New("Node/pnpm runner is not configured")
+		return DSHPluginReport{}, errors.New("Node/pnpm runner is not configured")
 	}
 	if _, err := runner.LookPath("pnpm"); err != nil {
-		return errors.New("pnpm is required for DSH plugin installation")
+		return DSHPluginReport{}, errors.New("pnpm is required for DSH plugin installation")
 	}
 	if _, err := runner.LookPath("uvx"); err != nil {
-		return errors.New("uv/uvx is required for the mandatory DuckDuckGo MCP")
+		return DSHPluginReport{}, errors.New("uv/uvx is required for the mandatory DuckDuckGo MCP")
 	}
-	plugins := []string{
-		"superpowers-dsh@" + LatestDependencySelector,
-		"https://github.com/dhicoc/dsh-reverse-skill.git",
-		"@deepseek-ai/dsh-mcp-client@" + LatestDependencySelector,
+	plugins := []struct {
+		packageName string
+		fallback    string
+		marker      string
+	}{
+		{packageName: "superpowers-dsh", fallback: "superpowers-dsh@" + LatestDependencySelector, marker: "superpowers-dsh"},
+		{fallback: "https://github.com/dhicoc/dsh-reverse-skill.git", marker: "dsh-reverse-skill"},
+		{packageName: "@deepseek-ai/dsh-mcp-client", fallback: "@deepseek-ai/dsh-mcp-client@" + LatestDependencySelector, marker: "dsh-mcp-client"},
 	}
+	report := DSHPluginReport{}
+	latestPlugins := map[string]string{}
 	for _, profile := range []string{"web", "headless"} {
-		for _, plugin := range plugins {
-			if _, err := runner.Run(ctx, "dsh", "plugin", "--profile", profile, "add", plugin); err != nil {
-				return fmt.Errorf("install DSH plugin %s into %s profile: %w", plugin, profile, err)
-			}
-		}
 		dump, err := runner.Run(ctx, "dsh", "--profile", profile, "--dump-config")
 		if err != nil {
-			return fmt.Errorf("verify DSH %s profile composition", profile)
+			return DSHPluginReport{}, fmt.Errorf("inspect DSH %s profile composition", profile)
 		}
-		for _, marker := range []string{"superpowers-dsh", "dsh-reverse-skill"} {
-			if !strings.Contains(dump, marker) {
-				return fmt.Errorf("DSH %s profile composition did not contain %s", profile, marker)
+		profileChanged := false
+		for _, plugin := range plugins {
+			present := DSHProfileHasMarker(dump, plugin.marker)
+			localVersion := dshProfileMarkerVersion(dump, plugin.marker)
+			latestVersion := ""
+			if plugin.packageName != "" && (!present || localVersion != "") && commandAvailable(runner, "npm") {
+				cached, cachedOK := latestPlugins[plugin.packageName]
+				if cachedOK {
+					latestVersion = cached
+				} else {
+					latestOutput, latestErr := runner.Run(ctx, "npm", "view", plugin.packageName, "version")
+					if latestErr != nil {
+						return DSHPluginReport{}, fmt.Errorf("check latest DSH plugin %s version", plugin.packageName)
+					}
+					var normalizeErr error
+					latestVersion, normalizeErr = NormalizeVersion(latestOutput)
+					if normalizeErr != nil {
+						return DSHPluginReport{}, fmt.Errorf("latest DSH plugin %s version is unknown", plugin.packageName)
+					}
+					latestPlugins[plugin.packageName] = latestVersion
+				}
+			}
+			if present && (localVersion == "" || latestVersion == "" || localVersion == latestVersion) {
+				continue
+			}
+			spec := plugin.fallback
+			if latestVersion != "" {
+				spec = plugin.packageName + "@" + latestVersion
+			}
+			reportStep(reporter, fmt.Sprintf("Installing DSH plugin %s in %s profile...", spec, profile))
+			if _, err := runner.Run(ctx, "dsh", "plugin", "--profile", profile, "add", spec); err != nil {
+				return DSHPluginReport{}, fmt.Errorf("install DSH plugin %s into %s profile: %w", spec, profile, err)
+			}
+			report.Changed = true
+			profileChanged = true
+		}
+		if profileChanged {
+			dump, err = runner.Run(ctx, "dsh", "--profile", profile, "--dump-config")
+			if err != nil {
+				return DSHPluginReport{}, fmt.Errorf("verify DSH %s profile composition", profile)
+			}
+		}
+		for _, marker := range []string{"superpowers-dsh", "dsh-reverse-skill", "dsh-mcp-client"} {
+			if !DSHProfileHasMarker(dump, marker) {
+				return DSHPluginReport{}, fmt.Errorf("DSH %s profile composition did not contain %s", profile, marker)
 			}
 		}
 	}
-	return nil
+	return report, nil
+}
+
+func dshProfileMarkerVersion(dump, marker string) string {
+	for _, line := range strings.Split(dump, "\n") {
+		if !DSHProfileHasMarker(line, marker) {
+			continue
+		}
+		if version, err := NormalizeVersion(line); err == nil {
+			return version
+		}
+	}
+	return ""
+}
+
+// DSHProfileHasMarker matches a plugin identity token from DSH's text, JSON,
+// or YAML dump without treating arbitrary paths or similarly named text as a
+// managed plugin entry.
+func DSHProfileHasMarker(dump, marker string) bool {
+	marker = strings.TrimSpace(marker)
+	if marker == "" {
+		return false
+	}
+	tokens := strings.FieldsFunc(dump, func(value rune) bool {
+		return unicode.IsSpace(value) || strings.ContainsRune("\"'[]{}(),:=", value)
+	})
+	for _, token := range tokens {
+		if token == marker || strings.HasPrefix(token, marker+"@") {
+			return true
+		}
+		if strings.HasPrefix(token, "@") && (strings.HasSuffix(token, "/"+marker) || strings.Contains(token, "/"+marker+"@")) {
+			return true
+		}
+	}
+	return false
 }
 
 func VerifyDSHProfile(ctx context.Context, runner CommandRunner) error {
@@ -98,7 +204,7 @@ func VerifyDSHProfile(ctx context.Context, runner CommandRunner) error {
 			return fmt.Errorf("verify DSH %s profile composition", profile)
 		}
 		for _, marker := range []string{"superpowers-dsh", "dsh-reverse-skill", "baron-dsh-adapter", "baron-ddg-search", "ddg-search"} {
-			if !strings.Contains(dump, marker) {
+			if !DSHProfileHasMarker(dump, marker) {
 				return fmt.Errorf("DSH %s profile composition did not contain %s", profile, marker)
 			}
 		}
@@ -135,6 +241,12 @@ func InstallCodex(ctx context.Context, runner CommandRunner, version string) err
 	return err
 }
 
+func InstallCodexLatestWithReport(ctx context.Context, runner CommandRunner, reporters ...ProgressReporter) (DependencyReport, error) {
+	return EnsureNPMDependencyLatest(ctx, runner, NPMDependencySpec{
+		Name: "Codex", Package: "@openai/codex", Command: "codex",
+	}, reporters...)
+}
+
 // InstallCodexWithSource verifies or installs the selected Codex CLI release and
 // reports whether Baron reused an existing binary or used the official npm
 // package path. The source is safe for receipts and never contains a command
@@ -152,6 +264,13 @@ func InstallCodexWithVersion(ctx context.Context, runner CommandRunner, version 
 		version = LatestDependencySelector
 	}
 	latest := version == LatestDependencySelector
+	if latest {
+		report, err := InstallCodexLatestWithReport(ctx, runner)
+		if err != nil {
+			return "", "", err
+		}
+		return report.Source, report.State.LocalVersion, nil
+	}
 	if !latest {
 		if _, codexErr := runner.LookPath("codex"); codexErr == nil {
 			if output, verifyErr := runner.Run(ctx, "codex", "--version"); verifyErr == nil && versionInOutput(output, version) {
@@ -230,11 +349,34 @@ func installGlobalNPM(ctx context.Context, runner CommandRunner, packageSpec str
 var reportedVersionPattern = regexp.MustCompile(`(?:^|[^0-9])v?([0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?)`)
 
 func reportedVersion(output string) string {
-	match := reportedVersionPattern.FindStringSubmatch(output)
-	if len(match) != 2 {
-		return ""
+	for _, match := range reportedVersionPattern.FindAllStringSubmatchIndex(output, -1) {
+		if len(match) < 4 {
+			continue
+		}
+		start, end := match[2], match[3]
+		if start > 0 {
+			previous := output[start-1]
+			if previous == 'v' {
+				if start > 1 && isVersionContinuation(output[start-2]) {
+					continue
+				}
+			} else if isVersionContinuation(previous) {
+				continue
+			}
+		}
+		if end < len(output) && isVersionContinuation(output[end]) {
+			continue
+		}
+		return output[start:end]
 	}
-	return strings.TrimPrefix(match[1], "v")
+	return ""
+}
+
+func isVersionContinuation(value byte) bool {
+	return value == '.' || value == '-' || value == '+' ||
+		(value >= '0' && value <= '9') ||
+		(value >= 'a' && value <= 'z') ||
+		(value >= 'A' && value <= 'Z')
 }
 
 func versionInOutput(output, version string) bool {

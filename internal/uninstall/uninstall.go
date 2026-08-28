@@ -31,6 +31,11 @@ type Options struct {
 	ProjectRoots         []string
 	ExecutablePath       string
 	PurgeShared          bool
+	PurgeAll             bool
+	HomeDir              string
+	SourceCheckouts      []string
+	EnvironmentFiles     []string
+	GOOS                 string
 	Runner               install.CommandRunner
 	RemoveExecutable     func(string) error
 }
@@ -62,6 +67,7 @@ func (r Report) String() string {
 }
 
 func BuildPlan(options Options) (Plan, error) {
+	purgeShared := options.PurgeShared || options.PurgeAll
 	globalPath := filepath.Clean(strings.TrimSpace(options.GlobalPath))
 	if globalPath == "." || globalPath == "" {
 		return Plan{}, errors.New("Baron global state path is required")
@@ -119,7 +125,7 @@ func BuildPlan(options Options) (Plan, error) {
 		if err := rejectDangerousPath(dshHome); err != nil {
 			return Plan{}, err
 		}
-		if options.PurgeShared && pathsOverlap(globalDir, dshHome) {
+		if purgeShared && pathsOverlap(globalDir, dshHome) {
 			return Plan{}, fmt.Errorf("refusing to purge DSH_HOME overlapping Baron global config: %s", dshHome)
 		}
 		for _, path := range options.DSHProfilePatchPaths {
@@ -131,7 +137,7 @@ func BuildPlan(options Options) (Plan, error) {
 		if options.DSHCredentialPath != "" && !pathWithin(dshHome, options.DSHCredentialPath) {
 			return Plan{}, fmt.Errorf("refusing to remove DSH credentials outside DSH_HOME: %s", options.DSHCredentialPath)
 		}
-		if options.PurgeShared {
+		if purgeShared {
 			add(dshHome)
 		}
 	}
@@ -141,13 +147,13 @@ func BuildPlan(options Options) (Plan, error) {
 		if err := rejectDangerousPath(codexHome); err != nil {
 			return Plan{}, err
 		}
-		if options.PurgeShared && pathsOverlap(globalDir, codexHome) {
+		if purgeShared && pathsOverlap(globalDir, codexHome) {
 			return Plan{}, fmt.Errorf("refusing to purge CODEX_HOME overlapping Baron global config: %s", codexHome)
 		}
 		if options.CodexHooksPath != "" && !pathWithin(codexHome, options.CodexHooksPath) {
 			return Plan{}, fmt.Errorf("refusing to remove Codex hooks outside CODEX_HOME: %s", options.CodexHooksPath)
 		}
-		if options.PurgeShared {
+		if purgeShared {
 			add(codexHome)
 		}
 	}
@@ -193,9 +199,33 @@ func BuildPlan(options Options) (Plan, error) {
 		}
 		add(options.ExecutablePath)
 	}
-	plan.Commands = append(plan.Commands, "npm uninstall --global @deepseek-ai/dsh @openai/codex")
+	packages := "@deepseek-ai/dsh @openai/codex"
+	if options.PurgeAll {
+		packages += " pnpm"
+	}
+	plan.Commands = append(plan.Commands, "npm uninstall --global "+packages)
 	if options.TencentInstallPath != "" {
 		plan.Commands = append(plan.Commands, "docker rm -f tdai-memory-core tdai-memory-hub tdai-proxy")
+	}
+	if options.PurgeAll {
+		home, err := resolvePurgeHome(options)
+		if err != nil {
+			return Plan{}, err
+		}
+		if samePath(filepath.Base(globalDir), "baron") && pathWithin(home, globalDir) {
+			if err := validatePurgePathWithin(home, globalDir); err != nil {
+				return Plan{}, err
+			}
+			add(globalDir)
+		}
+		resources, err := fullPurgeResources(options, home)
+		if err != nil {
+			return Plan{}, err
+		}
+		for _, path := range resources {
+			add(path)
+		}
+		plan.Commands = append(plan.Commands, fullPurgePlanCommands(options)...)
 	}
 	return plan, nil
 }
@@ -258,7 +288,8 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 		return Report{}, err
 	}
 	report := Report{}
-	if options.CodexHooksPath != "" && !options.PurgeShared {
+	purgeShared := options.PurgeShared || options.PurgeAll
+	if options.CodexHooksPath != "" && !purgeShared {
 		changed, removeErr := install.RemoveCodexHooks(options.CodexHooksPath, "baron")
 		if removeErr != nil {
 			return report, fmt.Errorf("remove Baron Codex hooks: %w", removeErr)
@@ -269,26 +300,26 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 			report.Skipped = append(report.Skipped, options.CodexHooksPath+" (no Baron hooks)")
 		}
 	}
-	if !options.PurgeShared {
-		for _, root := range options.ProjectRoots {
-			managed, managedErr := isBaronProjectRoot(filepath.Clean(strings.TrimSpace(root)))
-			if managedErr != nil {
-				return report, managedErr
-			}
-			if !managed {
-				continue
-			}
-			changed, removeErr := project.RemoveGitignoreRules(root)
-			if removeErr != nil {
-				return report, fmt.Errorf("remove Baron .gitignore rules: %w", removeErr)
-			}
-			path := filepath.Join(root, ".gitignore")
-			if changed {
-				report.Removed = append(report.Removed, path+" (Baron rules)")
-			} else {
-				report.Skipped = append(report.Skipped, path+" (no Baron rules)")
-			}
+	for _, root := range options.ProjectRoots {
+		managed, managedErr := isBaronProjectRoot(filepath.Clean(strings.TrimSpace(root)))
+		if managedErr != nil {
+			return report, managedErr
 		}
+		if !managed {
+			continue
+		}
+		changed, removeErr := project.RemoveGitignoreRules(root)
+		if removeErr != nil {
+			return report, fmt.Errorf("remove Baron .gitignore rules: %w", removeErr)
+		}
+		path := filepath.Join(root, ".gitignore")
+		if changed {
+			report.Removed = append(report.Removed, path+" (Baron rules)")
+		} else {
+			report.Skipped = append(report.Skipped, path+" (no Baron rules)")
+		}
+	}
+	if !purgeShared {
 		for _, path := range options.DSHProfilePatchPaths {
 			changed, removeErr := install.RemoveDSHProfilePatch(path)
 			if removeErr != nil {
@@ -318,7 +349,7 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 		}
 	}
 
-	if options.Runner != nil {
+	if options.Runner != nil && !options.PurgeAll {
 		if _, lookErr := options.Runner.LookPath("npm"); lookErr != nil {
 			report.Skipped = append(report.Skipped, "npm global packages (npm not found)")
 		} else if removeErr := install.RemoveGlobalNPM(ctx, options.Runner, "@deepseek-ai/dsh", "@openai/codex"); removeErr != nil {
@@ -354,19 +385,14 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 		}
 	}
 	removeEmptyParents(plan, &report)
+	if options.PurgeAll {
+		executeFullPurge(ctx, options, &report)
+	}
 	if options.ExecutablePath != "" {
 		if err := removeExecutable(options); err != nil {
 			return report, err
 		}
 		report.Removed = append(report.Removed, options.ExecutablePath+" (Baron binary)")
-	}
-	if strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")) != "" {
-		report.Skipped = append(report.Skipped, "DEEPSEEK_API_KEY environment override (unset it in the parent shell)")
-	}
-	for _, name := range []string{"BARON_TENCENT_USER_KEY", "BARON_TENCENT_ADMIN_KEY"} {
-		if strings.TrimSpace(os.Getenv(name)) != "" {
-			report.Skipped = append(report.Skipped, name+" environment override (unset it in the parent shell)")
-		}
 	}
 	if len(report.Warnings) > 0 {
 		return report, fmt.Errorf("Baron uninstall completed with warnings")
@@ -493,7 +519,7 @@ func removeExecutable(options Options) error {
 }
 
 func shouldSkipSharedChild(path string, options Options) bool {
-	if !options.PurgeShared {
+	if !options.PurgeShared && !options.PurgeAll {
 		return false
 	}
 	return path == filepath.Clean(options.DSHCredentialPath) || path == filepath.Clean(options.CodexHooksPath)

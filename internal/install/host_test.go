@@ -16,13 +16,14 @@ import (
 )
 
 type sudoReauthFixture struct {
-	calls          []string
-	interactive    int
-	failFirstSudo  bool
-	failedSudoCall bool
-	available      map[string]bool
-	outputs        map[string]string
-	onRun          func(name string, args ...string)
+	calls           []string
+	interactive     int
+	failFirstSudo   bool
+	failedSudoCall  bool
+	available       map[string]bool
+	outputs         map[string]string
+	postNodeVersion string
+	onRun           func(name string, args ...string)
 }
 
 func (f *sudoReauthFixture) LookPath(name string) (string, error) {
@@ -38,12 +39,24 @@ func (f *sudoReauthFixture) Run(_ context.Context, name string, args ...string) 
 	if f.onRun != nil {
 		f.onRun(name, args...)
 	}
+	if call == "sudo -n apt-get install -y nodejs" && f.postNodeVersion != "" {
+		if f.outputs == nil {
+			f.outputs = map[string]string{}
+		}
+		f.outputs["node --version"] = f.postNodeVersion
+	}
 	if f.failFirstSudo && !f.failedSudoCall && name == "sudo" && len(args) > 0 && args[0] == "-n" {
 		f.failedSudoCall = true
 		return "", errors.New("sudo: a password is required")
 	}
 	if output, ok := f.outputs[call]; ok {
 		return output, nil
+	}
+	if name == "npm" && len(args) == 3 && args[0] == "view" && args[1] == "pnpm" && args[2] == "version" {
+		return "9.15.0", nil
+	}
+	if name == "pnpm" && len(args) == 1 && args[0] == "--version" {
+		return "9.15.0", nil
 	}
 	return "ok", nil
 }
@@ -126,7 +139,7 @@ func TestEnsureHostToolchainRejectsUnsupportedDistributionBeforeDownload(t *test
 	if err := os.WriteFile(osRelease, []byte("ID=arch\nVERSION_ID=1\nVERSION_CODENAME=rolling\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fixture := &sudoReauthFixture{}
+	fixture := &sudoReauthFixture{postNodeVersion: "v26.8.1\n"}
 	_, err := EnsureHostToolchain(context.Background(), fixture, HostToolchainOptions{GOOS: "linux", GOARCH: "amd64", OSReleasePath: osRelease})
 	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "ubuntu/debian") {
 		t.Fatalf("unsupported distribution error=%v", err)
@@ -141,7 +154,7 @@ func TestEnsureHostToolchainUsesSudoPreflightBeforePackageWork(t *testing.T) {
 	if err := os.WriteFile(osRelease, []byte("ID=ubuntu\nVERSION_ID=26.04\nVERSION_CODENAME=questing\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fixture := &sudoReauthFixture{}
+	fixture := &sudoReauthFixture{postNodeVersion: "v26.8.1\n"}
 	fixture.available = map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true, "uv": true, "uvx": true}
 	fixture.outputs = map[string]string{"node --version": "v24.19.0\n"}
 	archive := uvTestArchive(t)
@@ -167,8 +180,9 @@ func TestEnsureHostToolchainReportsDependencyProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture := &sudoReauthFixture{
-		available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true, "uv": true, "uvx": true},
-		outputs:   map[string]string{"node --version": "v24.19.0\n"},
+		available:       map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true, "uv": true, "uvx": true},
+		outputs:         map[string]string{"node --version": "v24.19.0\n"},
+		postNodeVersion: "v26.8.1\n",
 	}
 	archive := uvTestArchive(t)
 	digest := sha256.Sum256(archive)
@@ -193,7 +207,7 @@ func TestEnsureHostToolchainBootstrapsMissingNodeAndPnpm(t *testing.T) {
 	if err := os.WriteFile(osRelease, []byte("ID=debian\nVERSION_ID=13\nVERSION_CODENAME=trixie\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fixture := &sudoReauthFixture{available: map[string]bool{"sudo": true, "uv": true, "uvx": true}}
+	fixture := &sudoReauthFixture{available: map[string]bool{"sudo": true, "uv": true, "uvx": true}, postNodeVersion: "v26.8.1\n"}
 	fixture.outputs = map[string]string{"node --version": "v24.19.0\n"}
 	fixture.onRun = func(name string, args ...string) {
 		call := name + " " + strings.Join(args, " ")
@@ -202,7 +216,7 @@ func TestEnsureHostToolchainBootstrapsMissingNodeAndPnpm(t *testing.T) {
 			fixture.available["npm"] = true
 			fixture.available["npx"] = true
 		}
-		if call == "sudo -n npm install --global pnpm@latest" {
+		if strings.Contains(call, "npm install --global pnpm@") {
 			fixture.available["pnpm"] = true
 		}
 	}
@@ -224,7 +238,7 @@ func TestEnsureHostToolchainBootstrapsMissingNodeAndPnpm(t *testing.T) {
 		t.Fatalf("host report=%#v, want Node and pnpm bootstrap", report)
 	}
 	calls := strings.Join(fixture.calls, "\n")
-	for _, want := range []string{"sudo -v", "sudo -n true", "sudo -n apt-get update", "sudo -n apt-get install -y nodejs", "sudo -n npm install --global pnpm@latest"} {
+	for _, want := range []string{"sudo -v", "sudo -n true", "sudo -n apt-get update", "sudo -n apt-get install -y nodejs", "npm install --global pnpm@9.15.0"} {
 		if !strings.Contains(calls, want) {
 			t.Fatalf("host bootstrap missing %q in calls:\n%s", want, calls)
 		}
@@ -237,7 +251,7 @@ func TestEnsureHostToolchainInstallsUVAndUVXOnlyAfterChecksumVerification(t *tes
 		t.Fatal(err)
 	}
 	home := t.TempDir()
-	fixture := &sudoReauthFixture{available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true}}
+	fixture := &sudoReauthFixture{available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true}, postNodeVersion: "v26.8.1\n"}
 	fixture.outputs = map[string]string{"node --version": "v24.19.0\n"}
 	archive := uvTestArchive(t)
 	digest := sha256.Sum256(archive)
@@ -264,7 +278,7 @@ func TestEnsureHostToolchainRejectsUVChecksumMismatch(t *testing.T) {
 	if err := os.WriteFile(osRelease, []byte("ID=debian\nVERSION_ID=13\nVERSION_CODENAME=trixie\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fixture := &sudoReauthFixture{available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true}}
+	fixture := &sudoReauthFixture{available: map[string]bool{"sudo": true, "node": true, "npm": true, "npx": true, "pnpm": true}, postNodeVersion: "v26.8.1\n"}
 	fixture.outputs = map[string]string{"node --version": "v24.19.0\n"}
 	archive := uvTestArchive(t)
 	download := hostDownloadFixture{archive: archive, checksum: strings.Repeat("0", sha256.Size*2)}
