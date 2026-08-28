@@ -173,6 +173,7 @@ func fullPurgeResources(options Options, home string) ([]string, error) {
 		filepath.Join(home, ".docker"),
 		filepath.Join(home, ".config", "docker"),
 	}
+	paths = append(paths, knownPurgeLauncherPaths(home)...)
 	if targetGOOS(options) == "windows" {
 		paths = append(paths,
 			filepath.Join(home, "AppData", "Local", "Docker"),
@@ -197,7 +198,11 @@ func fullPurgeResources(options Options, home string) ([]string, error) {
 		if !pathWithin(home, path) {
 			return nil, fmt.Errorf("refusing full purge path outside home directory: %s", path)
 		}
-		if err := validatePurgePathWithin(home, path); err != nil {
+		validate := validatePurgePathWithin
+		if isKnownPurgeLauncherPath(home, path) {
+			validate = validateKnownPurgePathWithin
+		}
+		if err := validate(home, path); err != nil {
 			return nil, err
 		}
 		if containsPath(validated, path) {
@@ -227,14 +232,41 @@ func fullPurgeResources(options Options, home string) ([]string, error) {
 	return validated, nil
 }
 
+func knownPurgeLauncherPaths(home string) []string {
+	binDir := filepath.Join(home, ".local", "bin")
+	return []string{
+		filepath.Join(binDir, "dsh"),
+		filepath.Join(binDir, "codex"),
+		filepath.Join(binDir, "pnpm"),
+		filepath.Join(binDir, "pnpx"),
+	}
+}
+
+func isKnownPurgeLauncherPath(home, path string) bool {
+	for _, known := range knownPurgeLauncherPaths(home) {
+		if samePath(known, path) {
+			return true
+		}
+	}
+	return false
+}
+
 func validatePurgePathWithin(home, path string) error {
+	return validatePurgePathWithinMode(home, path, false)
+}
+
+func validateKnownPurgePathWithin(home, path string) error {
+	return validatePurgePathWithinMode(home, path, true)
+}
+
+func validatePurgePathWithinMode(home, path string, allowKnownSymlink bool) error {
 	if err := rejectDangerousPath(path); err != nil {
 		return err
 	}
 	if !pathWithin(home, path) {
 		return fmt.Errorf("refusing full purge path outside home directory: %s", path)
 	}
-	if err := validatePathComponents(home, path); err != nil {
+	if err := validatePathComponentsWithFinalSymlink(home, path, allowKnownSymlink && isKnownPurgeLauncherPath(home, path)); err != nil {
 		return err
 	}
 	info, err := os.Lstat(path)
@@ -244,13 +276,17 @@ func validatePurgePathWithin(home, path string) error {
 	if err != nil {
 		return fmt.Errorf("inspect full purge path %s: %w", path, err)
 	}
-	if info.Mode()&os.ModeSymlink != 0 {
+	if info.Mode()&os.ModeSymlink != 0 && !(allowKnownSymlink && isKnownPurgeLauncherPath(home, path)) {
 		return fmt.Errorf("refusing full purge symlink path: %s", path)
 	}
 	return nil
 }
 
 func validatePathComponents(parent, child string) error {
+	return validatePathComponentsWithFinalSymlink(parent, child, false)
+}
+
+func validatePathComponentsWithFinalSymlink(parent, child string, allowFinalSymlink bool) error {
 	relative, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
 	if err != nil {
 		return fmt.Errorf("resolve full purge path components: %w", err)
@@ -269,6 +305,9 @@ func validatePathComponents(parent, child string) error {
 			return fmt.Errorf("inspect full purge path component %s: %w", current, err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
+			if allowFinalSymlink && samePath(current, child) {
+				return nil
+			}
 			return fmt.Errorf("refusing full purge through symlink path component: %s", current)
 		}
 		if !samePath(current, child) && !info.IsDir() {

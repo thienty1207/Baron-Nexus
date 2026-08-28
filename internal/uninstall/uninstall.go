@@ -360,6 +360,14 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 	if options.TencentInstallPath != "" && options.Runner != nil {
 		removeTencent(ctx, options, &report)
 	}
+	purgeHome := ""
+	if options.PurgeAll {
+		purgeHome, err = resolvePurgeHome(options)
+		if err != nil {
+			return report, err
+		}
+		executeFullPurge(ctx, options, &report)
+	}
 	for _, path := range plan.Resources {
 		if shouldSkipSharedChild(path, options) {
 			continue
@@ -367,11 +375,14 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 		if path == options.CodexHooksPath || path == options.DSHCredentialPath || containsPath(options.DSHProfilePatchPaths, path) || isPermissionLauncher(path, options) || isProjectGitignore(path, options) {
 			continue
 		}
-		if err := removePath(path, &report); err != nil {
+		if err := removePurgePath(path, purgeHome, &report); err != nil {
 			return report, err
 		}
 	}
 	if err := removeBaronBackups(options.GlobalPath, &report); err != nil {
+		return report, err
+	}
+	if err := removeBaronBackups(options.ExecutablePath, &report); err != nil {
 		return report, err
 	}
 	if options.PermissionsDirectory != "" {
@@ -385,9 +396,6 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 		}
 	}
 	removeEmptyParents(plan, &report)
-	if options.PurgeAll {
-		executeFullPurge(ctx, options, &report)
-	}
 	if options.ExecutablePath != "" {
 		if err := removeExecutable(options); err != nil {
 			return report, err
@@ -466,29 +474,53 @@ func removePath(path string, report *Report) error {
 	return nil
 }
 
+func removePurgePath(path, home string, report *Report) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		report.Skipped = append(report.Skipped, path+" (already absent)")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		if !isKnownPurgeLauncherPath(home, path) {
+			return fmt.Errorf("refusing to remove symlink path: %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("remove %s: %w", path, err)
+		}
+		report.Removed = append(report.Removed, path)
+		return nil
+	}
+	return removePath(path, report)
+}
+
 func removeBaronBackups(path string, report *Report) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
-	matches, err := filepath.Glob(path + ".baron-backup-*")
-	if err != nil {
-		return err
-	}
-	for _, match := range matches {
-		info, err := os.Lstat(match)
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
+	for _, pattern := range []string{path + ".baron-backup-*", path + ".baron-update-backup-*"} {
+		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			return err
 		}
-		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-			return fmt.Errorf("refusing to remove unsafe Baron backup: %s", match)
+		for _, match := range matches {
+			info, err := os.Lstat(match)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+				return fmt.Errorf("refusing to remove unsafe Baron backup: %s", match)
+			}
+			if err := os.Remove(match); err != nil {
+				return fmt.Errorf("remove Baron backup %s: %w", match, err)
+			}
+			report.Removed = append(report.Removed, match)
 		}
-		if err := os.Remove(match); err != nil {
-			return fmt.Errorf("remove Baron backup %s: %w", match, err)
-		}
-		report.Removed = append(report.Removed, match)
 	}
 	return nil
 }

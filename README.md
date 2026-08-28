@@ -1,10 +1,10 @@
 # Baron Nexus
 
-Current release: `0.1.11` — fixes DSH `0.1.1-rc.2` profile verification by distinguishing
-dependency-only MCP clients from composed bundles, preserves idempotent initialization,
-and keeps the latest-at-run dependency refresh, loading feedback, explicit opt-in
-auto-accept launchers, path-checked full uninstall, concise DeepSeek key rotation, and
-automated Ubuntu/Debian first-install bootstrap.
+Current release: `0.1.12` — fixes full Ubuntu/WSL uninstall cleanup for recreated npm
+caches, Codex launchers, and Baron update backups. It also keeps the DSH `0.1.1-rc.2`
+profile verification fix, idempotent initialization, latest-at-run dependency refresh,
+loading feedback, explicit opt-in auto-accept launchers, path-checked full uninstall,
+concise DeepSeek key rotation, and automated Ubuntu/Debian first-install bootstrap.
 
 Baron Nexus is a native Go project continuity sidecar for DeepSeek Harness and Codex.
 It records local work state first, routes bounded project memory to TencentDB
@@ -33,7 +33,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.11`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.12`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
 latest Node/uv releases at run time, and checks Docker Engine/Compose,
@@ -64,7 +64,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.11`. The PowerShell installer resolves the
+The expected output is `baron 0.1.12`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.

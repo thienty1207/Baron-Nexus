@@ -49,6 +49,93 @@ func (r *fullPurgeRunner) Run(_ context.Context, name string, args ...string) (s
 	}
 }
 
+type recreatingPurgeRunner struct {
+	*fullPurgeRunner
+	cachePath string
+}
+
+func (r *recreatingPurgeRunner) Run(ctx context.Context, name string, args ...string) (string, error) {
+	output, err := r.fullPurgeRunner.Run(ctx, name, args...)
+	if err == nil && name == "npm" && strings.Join(args, " ") == "cache clean --force" {
+		if makeErr := os.MkdirAll(r.cachePath, 0o700); makeErr != nil {
+			return "", makeErr
+		}
+		if writeErr := os.WriteFile(filepath.Join(r.cachePath, "recreated-by-npm"), []byte("cache"), 0o600); writeErr != nil {
+			return "", writeErr
+		}
+	}
+	return output, err
+}
+
+func TestExecuteFullPurgeRemovesCachesRecreatedByCleanupCommands(t *testing.T) {
+	root := t.TempDir()
+	npmCache := filepath.Join(root, ".npm")
+	if err := os.MkdirAll(npmCache, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runner := &recreatingPurgeRunner{
+		fullPurgeRunner: &fullPurgeRunner{},
+		cachePath:       npmCache,
+	}
+	_, err := Execute(context.Background(), Options{
+		GlobalPath: filepath.Join(root, ".config", "baron", "global.json"),
+		HomeDir:    root,
+		Runner:     runner,
+		PurgeAll:   true,
+		GOOS:       "linux",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(npmCache); !os.IsNotExist(err) {
+		t.Fatalf("cache recreated by cleanup command remains: %v", err)
+	}
+}
+
+func TestExecuteFullPurgeRemovesKnownCodexLauncherAndExecutableBackups(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(binDir, "baron")
+	if err := os.WriteFile(executable, []byte("baron"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	backup := executable + ".baron-update-backup-1"
+	if err := os.WriteFile(backup, []byte("old baron"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	codexTarget := filepath.Join(root, ".codex", "packages", "standalone", "current", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(codexTarget), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexTarget, []byte("codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	codexLink := filepath.Join(binDir, "codex")
+	if err := os.Symlink(codexTarget, codexLink); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+
+	_, err := Execute(context.Background(), Options{
+		GlobalPath:     filepath.Join(root, ".config", "baron", "global.json"),
+		HomeDir:        root,
+		ExecutablePath: executable,
+		Runner:         &fullPurgeRunner{},
+		PurgeAll:       true,
+		GOOS:           "linux",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{backup, codexLink} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("known uninstall artifact remains %s: %v", path, err)
+		}
+	}
+}
+
 func TestExecuteRemovesBaronResourcesAndPreservesSharedHomes(t *testing.T) {
 	root := t.TempDir()
 	globalDir := filepath.Join(root, "config")
