@@ -6,10 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 )
 
 const checkpointLockStaleAfter = 5 * time.Minute
+
+var checkpointProcessMu sync.Mutex
 
 // withCheckpointLock protects the SQLite-to-checkpoint materialization
 // boundary across separate Baron hook processes. O_CREATE|O_EXCL gives us a
@@ -19,6 +22,11 @@ func (e *Engine) withCheckpointLock(ctx context.Context, fn func() error) error 
 	if e == nil || e.checkpointPath == "" {
 		return fn()
 	}
+	// Serialize same-process writers as well as the cross-process lock below.
+	// This avoids platform-specific O_EXCL error mappings during goroutine
+	// contention while the file remains the inter-process authority.
+	checkpointProcessMu.Lock()
+	defer checkpointProcessMu.Unlock()
 	lockDir := filepath.Join(filepath.Dir(e.checkpointPath), "runtime", "locks")
 	if err := os.MkdirAll(lockDir, 0o700); err != nil {
 		return fmt.Errorf("create checkpoint lock directory: %w", err)
@@ -37,7 +45,20 @@ func (e *Engine) withCheckpointLock(ctx context.Context, fn func() error) error 
 			defer os.Remove(lockPath)
 			return fn()
 		}
-		if !os.IsExist(err) {
+		lockExists := os.IsExist(err)
+		if !lockExists {
+			// Windows can report ERROR_ACCESS_DENIED for O_EXCL when another
+			// process already owns the path. Confirm the path before treating it
+			// as a real permissions failure.
+			if _, statErr := os.Stat(lockPath); statErr == nil {
+				lockExists = true
+			} else if os.IsNotExist(statErr) {
+				continue
+			} else {
+				return fmt.Errorf("create checkpoint lock: %w", err)
+			}
+		}
+		if !lockExists {
 			return fmt.Errorf("create checkpoint lock: %w", err)
 		}
 		if info, statErr := os.Stat(lockPath); statErr == nil && time.Since(info.ModTime()) >= checkpointLockStaleAfter {
