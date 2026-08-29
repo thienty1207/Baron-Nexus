@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -54,37 +55,10 @@ func MergeCodexHooksWithChange(path, binary string) (bool, error) {
 	for _, event := range codexEvents {
 		items, _ := hooks[event].([]any)
 		command := binary + " hook codex " + event
-		found := false
-		for _, item := range items {
-			entry, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			if value, _ := entry["command"].(string); value == command {
-				entry["timeout"] = codexHookTimeoutSeconds
-				found = true
-				break
-			}
-			commands, _ := entry["hooks"].([]any)
-			for _, commandRaw := range commands {
-				commandEntry, ok := commandRaw.(map[string]any)
-				if ok && commandEntry["type"] == "command" && commandEntry["command"] == command {
-					commandEntry["timeout"] = codexHookTimeoutSeconds
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
+		normalized, changed := canonicalizeCodexHookItems(items, binary, command)
+		if changed {
+			hooks[event] = normalized
 		}
-		if !found {
-			items = append(items, map[string]any{"hooks": []any{map[string]any{
-				"type": "command", "command": command, "timeout": codexHookTimeoutSeconds,
-				"statusMessage": "Baron project continuity",
-			}}})
-		}
-		hooks[event] = items
 	}
 	data, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
@@ -218,7 +192,107 @@ func removeBaronHookEntry(raw any, binary string) (any, bool, bool) {
 }
 
 func isBaronCodexHook(command, binary string) bool {
-	return strings.HasPrefix(strings.TrimSpace(command), strings.TrimSpace(binary)+" hook codex ")
+	command = strings.TrimSpace(command)
+	binary = strings.TrimSpace(binary)
+	if binary != "" && strings.HasPrefix(command, binary+" hook codex ") {
+		return true
+	}
+	for _, event := range codexEvents {
+		if isBaronCodexHookForEvent(command, event) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBaronCodexHookForEvent(command, event string) bool {
+	suffix := " hook codex " + event
+	if !strings.HasSuffix(command, suffix) {
+		return false
+	}
+	executable := strings.TrimSpace(strings.TrimSuffix(command, suffix))
+	executable = strings.Trim(executable, "\"'")
+	executable = strings.ReplaceAll(executable, "\\", "/")
+	base := strings.ToLower(path.Base(executable))
+	return base == "baron" || base == "baron.exe"
+}
+
+func canonicalizeCodexHookItems(items []any, binary, command string) ([]any, bool) {
+	result := make([]any, 0, len(items)+1)
+	found := false
+	changed := false
+	for _, raw := range items {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			result = append(result, raw)
+			continue
+		}
+		if entryCommand, ok := entry["command"].(string); ok && isBaronCodexHook(entryCommand, binary) {
+			if entryCommand == command && !found {
+				entry["timeout"] = codexHookTimeoutSeconds
+				result = append(result, entry)
+				found = true
+				continue
+			}
+			changed = true
+			continue
+		}
+		nested, hasNested := entry["hooks"].([]any)
+		if !hasNested {
+			result = append(result, entry)
+			continue
+		}
+		filtered := make([]any, 0, len(nested))
+		nestedChanged := false
+		for _, nestedRaw := range nested {
+			nestedEntry, ok := nestedRaw.(map[string]any)
+			if !ok {
+				filtered = append(filtered, nestedRaw)
+				continue
+			}
+			nestedCommand, commandOK := nestedEntry["command"].(string)
+			if !commandOK || !isBaronCodexHook(nestedCommand, binary) {
+				filtered = append(filtered, nestedRaw)
+				continue
+			}
+			if nestedCommand == command && !found {
+				nestedEntry["timeout"] = codexHookTimeoutSeconds
+				filtered = append(filtered, nestedEntry)
+				found = true
+				continue
+			}
+			nestedChanged = true
+		}
+		if nestedChanged {
+			changed = true
+			if len(filtered) == 0 {
+				delete(entry, "hooks")
+				if baronHookGroupHasNoUserFields(entry) {
+					continue
+				}
+			} else {
+				entry["hooks"] = filtered
+			}
+		}
+		result = append(result, entry)
+	}
+	if !found {
+		result = append(result, map[string]any{"hooks": []any{map[string]any{
+			"type": "command", "command": command, "timeout": codexHookTimeoutSeconds,
+			"statusMessage": "Baron project continuity",
+		}}})
+		changed = true
+	}
+	return result, changed
+}
+
+func baronHookGroupHasNoUserFields(entry map[string]any) bool {
+	for key := range entry {
+		if key != "statusMessage" && key != "timeout" {
+			return false
+		}
+	}
+	return true
 }
 
 type DSHOptions struct {

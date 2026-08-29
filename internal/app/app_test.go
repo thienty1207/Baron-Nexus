@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -407,6 +408,8 @@ func TestCodexInitPrintsOneTimeLoginNotice(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	application := New()
@@ -685,6 +688,109 @@ func TestCodexHookWrapsRecoveryContextInHookSpecificOutput(t *testing.T) {
 	}
 	if _, ok := response["hookSpecificOutput"]; !ok {
 		t.Fatalf("Codex-specific hook output missing: %s", output.String())
+	}
+}
+
+func TestCodexHookFailureResponsesRespectEventSchemas(t *testing.T) {
+	tests := []struct {
+		event          string
+		wantContinue   bool
+		wantHookOutput bool
+		wantSystemMsg  bool
+	}{
+		{event: "SessionStart", wantContinue: true, wantHookOutput: true},
+		{event: "UserPromptSubmit", wantContinue: true, wantHookOutput: true},
+		{event: "PreToolUse", wantHookOutput: true},
+		{event: "PostToolUse", wantContinue: true, wantHookOutput: true},
+		{event: "PreCompact", wantContinue: true, wantSystemMsg: true},
+		{event: "PostCompact", wantContinue: true, wantSystemMsg: true},
+		{event: "Stop", wantContinue: true, wantSystemMsg: true},
+		{event: "PermissionRequest", wantHookOutput: false, wantSystemMsg: true},
+		{event: "SubagentStart", wantContinue: true, wantHookOutput: true},
+		{event: "SubagentStop", wantContinue: true, wantSystemMsg: true},
+		{event: "SessionEnd", wantHookOutput: false, wantSystemMsg: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.event, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := writeHookFailureForClient(&output, "codex", test.event, errors.New("diagnostic")); err != nil {
+				t.Fatal(err)
+			}
+			var response map[string]any
+			if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+				t.Fatalf("invalid JSON: %v; output=%q", err, output.String())
+			}
+			_, hasContinue := response["continue"]
+			if hasContinue != test.wantContinue {
+				t.Fatalf("continue present=%v, want %v; output=%s", hasContinue, test.wantContinue, output.String())
+			}
+			_, hasHookOutput := response["hookSpecificOutput"]
+			if hasHookOutput != test.wantHookOutput {
+				t.Fatalf("hookSpecificOutput present=%v, want %v; output=%s", hasHookOutput, test.wantHookOutput, output.String())
+			}
+			_, hasSystemMessage := response["systemMessage"]
+			if hasSystemMessage != test.wantSystemMsg {
+				t.Fatalf("systemMessage present=%v, want %v; output=%s", hasSystemMessage, test.wantSystemMsg, output.String())
+			}
+		})
+	}
+}
+
+func TestCodexHookOutputSanitizesInternalErrorsAndMalformedResponses(t *testing.T) {
+	tests := []struct {
+		name        string
+		event       string
+		input       string
+		wantMessage string
+	}{
+		{name: "response error", event: "Stop", input: `{"ok":false,"error":"schema mismatch"}`, wantMessage: "schema mismatch"},
+		{name: "malformed response", event: "PreCompact", input: `{"ok":true}\n{"broken"`, wantMessage: "invalid internal hook response"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if err := writeCodexHookOutput(&output, test.event, []byte(test.input)); err != nil {
+				t.Fatal(err)
+			}
+			var response map[string]any
+			if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+				t.Fatalf("invalid JSON: %v; output=%q", err, output.String())
+			}
+			if strings.Contains(output.String(), `{"ok":false`) {
+				t.Fatalf("internal Baron response leaked to Codex: %s", output.String())
+			}
+			message, _ := response["systemMessage"].(string)
+			if !strings.Contains(message, test.wantMessage) {
+				t.Fatalf("systemMessage=%q, want %q", message, test.wantMessage)
+			}
+		})
+	}
+}
+
+func TestCodexPreToolUseResponseOmitsUnsupportedContinue(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Project PreToolUse")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	application := New()
+	application.GlobalPath = filepath.Join(t.TempDir(), "global.json")
+	application.ProjectProvisioner = func(context.Context, string, string) (contracts.ProjectBinding, error) {
+		return contracts.ProjectBinding{TeamID: "team", AgentID: "agent", UserID: "user"}, nil
+	}
+	if _, err := application.SetupProject(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := application.HandleHook(context.Background(), "codex", "PreToolUse", root, bytes.NewBufferString(`{}`), &output); err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatalf("invalid JSON: %v; output=%q", err, output.String())
+	}
+	if _, ok := response["continue"]; ok {
+		t.Fatalf("PreToolUse response contains unsupported continue field: %s", output.String())
 	}
 }
 

@@ -121,7 +121,7 @@ func InspectCodexHooks(path, binary string) (CodexHookInspection, error) {
 	}
 	hooks, _ := root["hooks"].(map[string]any)
 	for _, event := range codexEvents {
-		if codexHookEventConfigured(hooks[event], binary+" hook codex "+event) {
+		if codexHookEventConfigured(hooks[event], binary, event) {
 			inspection.ConfiguredEvents++
 			continue
 		}
@@ -136,18 +136,23 @@ func InspectCodexHooks(path, binary string) (CodexHookInspection, error) {
 	return inspection, nil
 }
 
-func codexHookEventConfigured(raw any, command string) bool {
+func codexHookEventConfigured(raw any, binary, event string) bool {
+	command := binary + " hook codex " + event
 	items, _ := raw.([]any)
 	for _, item := range items {
 		entry, _ := item.(map[string]any)
 		if value, _ := entry["command"].(string); value == command {
 			return true
 		}
+		if value, _ := entry["command"].(string); isBaronCodexHookForEvent(value, event) {
+			return true
+		}
 		nested, _ := entry["hooks"].([]any)
 		for _, nestedRaw := range nested {
 			nestedEntry, _ := nestedRaw.(map[string]any)
 			if nestedEntry["type"] == "command" {
-				if value, _ := nestedEntry["command"].(string); value == command {
+				value, _ := nestedEntry["command"].(string)
+				if value == command || isBaronCodexHookForEvent(value, event) {
 					return true
 				}
 			}

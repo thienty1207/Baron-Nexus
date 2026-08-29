@@ -188,6 +188,10 @@ func (s *Syncer) Flush(ctx context.Context, limit int) (int, error) {
 			lastErr = errors.New("queued isolation context mismatch")
 			continue
 		}
+		if s.backend == nil {
+			lastErr = s.retryQueueItem(flushCtx, item, "memory backend is not configured", false)
+			continue
+		}
 		receipt, captureErr := s.backend.Capture(flushCtx, queued.Isolation, queued.Record, queued.Key)
 		if captureErr != nil {
 			safeError := config.Redact(captureErr.Error(), s.secrets)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,6 +49,25 @@ type Runtime struct {
 	syncer           *continuity.Syncer
 	operationHandler continuity.QueueOperationHandler
 	repositoryRoot   string
+}
+
+const (
+	// Hook payloads are event evidence, not an unbounded transcript store. A
+	// bounded row keeps concurrent Codex hooks below the provider timeout.
+	maxHookPayloadBytes      = 64 * 1024
+	maxLifecycleStringBytes  = 8192
+	maxLifecycleMapKeys      = 64
+	maxLifecycleArrayItems   = 100
+	maxLifecycleNestingDepth = 6
+)
+
+var lifecyclePayloadPriority = []string{
+	"task_id", "active_task_id", "session_id", "event_id", "idempotency_key",
+	"command", "tool_name", "tool_output", "tool_response", "summary", "error",
+	"status", "exit_code", "task_status", "goal", "current_step", "last_successful_step", "next_action",
+	"completion_verified", "completion_policy", "verification_ref", "verification_kind", "verification_scope",
+	"git_head", "diff_hash", "file", "symbol", "changed_files", "module_paths", "dependencies",
+	"last_assistant_message", "response", "raw_output", "baron_payload_truncated",
 }
 
 func NewRuntime(store *storage.Store, engine *continuity.Engine, projectID string) *Runtime {
@@ -437,7 +457,7 @@ func (r *Runtime) flushRemoteQueue(ctx context.Context) {
 }
 
 func (r *Runtime) captureMemory(ctx context.Context, request Request, state continuity.WorkState) {
-	if r == nil || r.syncer == nil || !shouldCaptureRemote(request, state) {
+	if r == nil || r.syncer == nil || r.backend == nil || !shouldCaptureRemote(request, state) {
 		return
 	}
 	record, ok := memoryRecord(request, state)
@@ -942,6 +962,30 @@ func normalizeLifecyclePayload(raw json.RawMessage, event contracts.EventType) (
 	if payload == nil {
 		return raw, nil
 	}
+	if _, ok := payload["exit_code"]; !ok {
+		for _, key := range []string{"last_assistant_message", "response", "tool_response", "tool_output"} {
+			if text, ok := payload[key].(string); ok {
+				if exitCode, found := exitCodeFromText(text); found {
+					payload["exit_code"] = exitCode
+					break
+				}
+			}
+		}
+	}
+	if _, ok := payload["status"]; !ok {
+		if exitCode, ok := lifecycleExitCode(payload["exit_code"]); ok && exitCode != 0 {
+			payload["status"] = "failed"
+		} else {
+			for _, key := range []string{"tool_response", "tool_output"} {
+				if output, ok := payload[key].(string); ok && looksLikeToolFailure(output) {
+					payload["status"] = "failed"
+					break
+				}
+			}
+		}
+	}
+	compacted, truncated := compactLifecyclePayload(payload)
+	payload = compacted
 	if _, ok := payload["command"]; !ok {
 		if toolInput, ok := payload["tool_input"].(map[string]any); ok {
 			if command, ok := toolInput["command"].(string); ok && strings.TrimSpace(command) != "" {
@@ -970,23 +1014,6 @@ func normalizeLifecyclePayload(raw json.RawMessage, event contracts.EventType) (
 			payload["summary"] = output
 		}
 	}
-	if _, ok := payload["exit_code"]; !ok {
-		for _, key := range []string{"last_assistant_message", "response", "tool_response", "tool_output"} {
-			if text, ok := payload[key].(string); ok {
-				if exitCode, found := exitCodeFromText(text); found {
-					payload["exit_code"] = exitCode
-					break
-				}
-			}
-		}
-	}
-	if _, ok := payload["status"]; !ok {
-		if exitCode, ok := payload["exit_code"].(int); ok && exitCode != 0 {
-			payload["status"] = "failed"
-		} else if output, ok := payload["tool_response"].(string); ok && looksLikeToolFailure(output) {
-			payload["status"] = "failed"
-		}
-	}
 	if payload["status"] == "failed" {
 		if _, ok := payload["error"]; !ok {
 			if output, ok := payload["tool_output"].(string); ok && strings.TrimSpace(output) != "" {
@@ -994,11 +1021,180 @@ func normalizeLifecyclePayload(raw json.RawMessage, event contracts.EventType) (
 			}
 		}
 	}
-	normalized, err := json.Marshal(payload)
+	if truncated {
+		payload["baron_payload_truncated"] = true
+	}
+	normalized, err := marshalLifecyclePayload(payload)
 	if err != nil {
 		return raw, err
 	}
 	return normalized, nil
+}
+
+func compactLifecyclePayload(payload map[string]any) (map[string]any, bool) {
+	return compactLifecycleMap(payload, maxLifecycleStringBytes, maxLifecycleMapKeys, maxLifecycleArrayItems, 0)
+}
+
+func compactLifecycleMap(payload map[string]any, stringLimit, mapLimit, arrayLimit, depth int) (map[string]any, bool) {
+	keys, truncated := lifecycleMapKeys(payload, mapLimit)
+	result := make(map[string]any, len(keys))
+	for _, key := range keys {
+		value, valueTruncated := compactLifecycleValue(payload[key], key, stringLimit, mapLimit, arrayLimit, depth)
+		result[key] = value
+		truncated = truncated || valueTruncated
+	}
+	return result, truncated
+}
+
+func lifecycleMapKeys(payload map[string]any, limit int) ([]string, bool) {
+	if limit <= 0 {
+		return nil, len(payload) > 0
+	}
+	allKeys := make([]string, 0, len(payload))
+	for key := range payload {
+		allKeys = append(allKeys, key)
+	}
+	sort.Strings(allKeys)
+	if len(allKeys) <= limit {
+		return allKeys, false
+	}
+	keys := make([]string, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	for _, key := range lifecyclePayloadPriority {
+		if _, ok := payload[key]; !ok {
+			continue
+		}
+		keys = append(keys, key)
+		seen[key] = struct{}{}
+		if len(keys) == limit {
+			return keys, true
+		}
+	}
+	for _, key := range allKeys {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		keys = append(keys, key)
+		if len(keys) == limit {
+			break
+		}
+	}
+	return keys, true
+}
+
+func compactLifecycleValue(value any, key string, stringLimit, mapLimit, arrayLimit, depth int) (any, bool) {
+	switch value := value.(type) {
+	case string:
+		return boundedLifecycleText(value, lifecycleStringLimit(key, stringLimit))
+	case map[string]any:
+		if depth >= maxLifecycleNestingDepth {
+			return "[nested payload omitted]", true
+		}
+		return compactLifecycleMap(value, stringLimit, mapLimit, arrayLimit, depth+1)
+	case []any:
+		if depth >= maxLifecycleNestingDepth {
+			return "[nested payload omitted]", true
+		}
+		truncated := len(value) > arrayLimit
+		if truncated {
+			value = value[:arrayLimit]
+		}
+		result := make([]any, 0, len(value))
+		for _, item := range value {
+			compacted, itemTruncated := compactLifecycleValue(item, key, stringLimit, mapLimit, arrayLimit, depth+1)
+			result = append(result, compacted)
+			truncated = truncated || itemTruncated
+		}
+		return result, truncated
+	default:
+		return value, false
+	}
+}
+
+func lifecycleStringLimit(key string, fallback int) int {
+	switch key {
+	case "command", "tool_name":
+		return 4096
+	case "goal":
+		return 4096
+	case "tool_output", "tool_response", "last_assistant_message", "response", "summary", "error", "raw_output":
+		return maxLifecycleStringBytes
+	case "current_step", "last_successful_step", "next_action":
+		return 2048
+	case "task_id", "active_task_id", "session_id", "event_id", "idempotency_key", "verification_ref", "git_head", "diff_hash":
+		return 512
+	default:
+		return fallback
+	}
+}
+
+func boundedLifecycleText(value string, max int) (string, bool) {
+	value = strings.TrimSpace(value)
+	if max <= 0 || len(value) <= max {
+		return value, false
+	}
+	const marker = "...[truncated]"
+	if max <= len(marker) {
+		return value[:max], true
+	}
+	available := max - len(marker)
+	head := available / 2
+	tail := available - head
+	return value[:head] + marker + value[len(value)-tail:], true
+}
+
+func lifecycleExitCode(value any) (int, bool) {
+	switch value := value.(type) {
+	case int:
+		return value, true
+	case float64:
+		return int(value), value == float64(int(value))
+	default:
+		return 0, false
+	}
+}
+
+func marshalLifecyclePayload(payload map[string]any) ([]byte, error) {
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if len(normalized) <= maxHookPayloadBytes {
+		return normalized, nil
+	}
+	// A pathological upstream object can still exceed the per-field limits.
+	// Recompact it with a smaller shape before dropping any canonical field.
+	tight, _ := compactLifecycleMap(payload, 4096, 16, 32, 0)
+	tight["baron_payload_truncated"] = true
+	normalized, err = json.Marshal(tight)
+	if err != nil {
+		return nil, err
+	}
+	if len(normalized) <= maxHookPayloadBytes {
+		return normalized, nil
+	}
+	return marshalMinimalLifecyclePayload(tight)
+}
+
+func marshalMinimalLifecyclePayload(payload map[string]any) ([]byte, error) {
+	minimal := make(map[string]any)
+	for _, key := range lifecyclePayloadPriority {
+		if value, ok := payload[key]; ok {
+			candidate := make(map[string]any, len(minimal)+1)
+			for existingKey, existingValue := range minimal {
+				candidate[existingKey] = existingValue
+			}
+			candidate[key] = value
+			data, err := json.Marshal(candidate)
+			if err != nil {
+				return nil, err
+			}
+			if len(data) <= maxHookPayloadBytes {
+				minimal = candidate
+			}
+		}
+	}
+	return json.Marshal(minimal)
 }
 
 func looksLikeToolFailure(value string) bool {

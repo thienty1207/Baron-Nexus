@@ -145,6 +145,29 @@ func TestTypedKnowledgeQueueOperationUsesHandlerAndIsDeliveredOnce(t *testing.T)
 	}
 }
 
+func TestMemoryCaptureWithoutBackendFailsOpenInsteadOfPanicking(t *testing.T) {
+	root := t.TempDir()
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	projectID := "prj-memory-no-backend-12345678"
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "memory-no-backend"}); err != nil {
+		t.Fatal(err)
+	}
+	syncer := NewSyncer(store, nil, contracts.IsolationContext{ProjectID: projectID, TeamID: "team", AgentID: "agent", UserID: "user"}, nil)
+	syncer.SetQueueOperationHandler(func(context.Context, storage.QueueItem) (string, error) {
+		return "typed-handler", nil
+	})
+	if _, err := syncer.QueueCapture(context.Background(), contracts.MemoryRecord{ProjectID: projectID, Content: "queued without backend", SourceClient: contracts.ClientCodex}, "no-backend-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncer.Flush(context.Background(), 10); err == nil || !strings.Contains(err.Error(), "memory backend") {
+		t.Fatalf("missing memory backend was not reported safely: %v", err)
+	}
+}
+
 func TestTypedKnowledgeQueueRetriesOutageThenDeliversExactlyOnce(t *testing.T) {
 	root := t.TempDir()
 	store, err := storage.Open(filepath.Join(root, "state.db"))

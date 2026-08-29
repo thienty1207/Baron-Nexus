@@ -1372,16 +1372,7 @@ func (a *App) HandleHook(ctx context.Context, clientName, eventName, root string
 		return writeHookFailureForClient(output, clientName, eventName, err)
 	}
 	if strings.EqualFold(clientName, "codex") {
-		var response hooks.Response
-		if err := json.Unmarshal(hookOutput.Bytes(), &response); err == nil {
-			codexOutput := map[string]any{"continue": true}
-			if response.Context != "" {
-				codexOutput["hookSpecificOutput"] = map[string]any{
-					"hookEventName": eventName, "additionalContext": response.Context,
-				}
-			}
-			return json.NewEncoder(output).Encode(codexOutput)
-		}
+		return writeCodexHookOutput(output, eventName, hookOutput.Bytes())
 	}
 	_, err = io.Copy(output, &hookOutput)
 	return err
@@ -1399,16 +1390,97 @@ func writeHookFailureForClient(output io.Writer, clientName, eventName string, e
 		if output == nil {
 			return nil
 		}
-		response := map[string]any{"continue": true}
+		context := ""
 		if err != nil {
-			response["hookSpecificOutput"] = map[string]any{
-				"hookEventName":     eventName,
-				"additionalContext": "Baron hook diagnostic (fail-open): " + config.Redact(err.Error(), nil),
-			}
+			context = "Baron hook diagnostic (fail-open): " + config.Redact(err.Error(), nil)
 		}
-		return json.NewEncoder(output).Encode(response)
+		return json.NewEncoder(output).Encode(codexHookResponse(eventName, context))
 	}
 	return writeHookFailure(output, err)
+}
+
+func writeCodexHookOutput(output io.Writer, eventName string, data []byte) error {
+	if output == nil {
+		return nil
+	}
+	var response hooks.Response
+	context := ""
+	if err := json.Unmarshal(data, &response); err != nil {
+		context = "Baron hook diagnostic (fail-open): invalid internal hook response: " + config.Redact(err.Error(), nil)
+	} else {
+		context = response.Context
+		if response.Error != "" {
+			if context != "" {
+				context += "\n"
+			}
+			context += "Baron hook diagnostic (fail-open): " + config.Redact(response.Error, nil)
+		}
+	}
+	return json.NewEncoder(output).Encode(codexHookResponse(eventName, context))
+}
+
+func codexHookResponse(eventName, context string) map[string]any {
+	response := map[string]any{}
+	officialEventName := codexEventName(eventName)
+	if codexHookSupportsContinue(officialEventName) {
+		response["continue"] = true
+	}
+	if context == "" {
+		return response
+	}
+
+	switch officialEventName {
+	case "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart":
+		response["hookSpecificOutput"] = map[string]any{
+			"hookEventName": officialEventName, "additionalContext": context,
+		}
+	case "PreCompact", "PostCompact", "Stop", "SubagentStop", "PermissionRequest":
+		// These events accept common output fields but do not accept the
+		// hookSpecificOutput.additionalContext block.
+		response["systemMessage"] = context
+	}
+	return response
+}
+
+func codexHookSupportsContinue(eventName string) bool {
+	switch eventName {
+	case "SessionStart", "UserPromptSubmit", "PostToolUse", "PreCompact", "PostCompact", "Stop", "SubagentStart", "SubagentStop":
+		return true
+	default:
+		// PreToolUse, PermissionRequest, and SessionEnd either reject this
+		// field or do not consume hook output. Unknown events stay fail-open.
+		return false
+	}
+}
+
+func codexEventName(eventName string) string {
+	key := strings.ToLower(strings.NewReplacer("-", "_", " ", "_", "/", "_").Replace(eventName))
+	switch key {
+	case "sessionstart", "session_started", "session_start":
+		return "SessionStart"
+	case "userpromptsubmit", "user_prompt":
+		return "UserPromptSubmit"
+	case "pretooluse", "pre_tool_use", "tool_started":
+		return "PreToolUse"
+	case "posttooluse", "post_tool_use", "tool_finished":
+		return "PostToolUse"
+	case "precompact", "pre_compact":
+		return "PreCompact"
+	case "postcompact", "post_compact":
+		return "PostCompact"
+	case "stop", "assistant_final":
+		return "Stop"
+	case "permissionrequest", "permission_request":
+		return "PermissionRequest"
+	case "subagentstart", "subagent_start":
+		return "SubagentStart"
+	case "subagentstop", "subagent_stop":
+		return "SubagentStop"
+	case "sessionend", "session_end", "session_clean_closed":
+		return "SessionEnd"
+	default:
+		return eventName
+	}
 }
 
 func canonicalEvent(value string) contracts.EventType {

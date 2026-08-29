@@ -73,6 +73,68 @@ func TestCodexHookMergePreservesCustomConfigAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCodexHookMergeCollapsesLegacyBaronBinaryPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	original := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/home/ty/.local/bin/baron hook codex SessionStart"},{"type":"command","command":"baron hook codex SessionStart"}]},{"command":"custom-hook"}]}}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := MergeCodexHooks(path, "baron"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config map[string]any
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	groups := config["hooks"].(map[string]any)["SessionStart"].([]any)
+	baronCount := 0
+	customCount := 0
+	for _, raw := range groups {
+		group := raw.(map[string]any)
+		if command, ok := group["command"].(string); ok {
+			if strings.Contains(command, " hook codex ") {
+				baronCount++
+			}
+			if command == "custom-hook" {
+				customCount++
+			}
+		}
+		nested, _ := group["hooks"].([]any)
+		for _, nestedRaw := range nested {
+			command, _ := nestedRaw.(map[string]any)["command"].(string)
+			if strings.Contains(command, " hook codex ") {
+				baronCount++
+			}
+		}
+	}
+	if baronCount != 1 || customCount != 1 {
+		t.Fatalf("Baron hook count=%d custom hook count=%d config=%s", baronCount, customCount, data)
+	}
+}
+
+func TestRemoveCodexHooksRemovesLegacyBaronBinaryPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	original := []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"/home/ty/.local/bin/baron hook codex SessionStart"}]},{"command":"custom-hook"}]}}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := RemoveCodexHooks(path, "baron")
+	if err != nil || !changed {
+		t.Fatalf("legacy Baron hook was not removed: changed=%v err=%v", changed, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "hook codex") || !strings.Contains(string(data), "custom-hook") {
+		t.Fatalf("uninstall removed the wrong hook data: %s", data)
+	}
+}
+
 func TestCodexHookMergeEmitsOfficialNestedCommandShape(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hooks.json")
 	if err := MergeCodexHooks(path, "baron"); err != nil {

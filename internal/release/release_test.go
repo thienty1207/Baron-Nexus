@@ -173,6 +173,47 @@ func serverURL(r *http.Request, path string) string {
 	return "http://" + r.Host + path
 }
 
+func TestInstallLatestDoesNotDowngradeNewerCurrentVersion(t *testing.T) {
+	counts := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		counts[r.URL.Path]++
+		if r.URL.Path != "/repos/owner/repo/releases/latest" {
+			http.Error(w, "unexpected downgrade work", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"tag_name": "v0.1.14", "assets": []map[string]string{
+			{"name": "baron-linux-amd64", "browser_download_url": serverURL(r, "/download/baron-linux-amd64")},
+			{"name": "release-manifest.json", "browser_download_url": serverURL(r, "/download/release-manifest.json")},
+			{"name": "SHA256SUMS", "browser_download_url": serverURL(r, "/download/SHA256SUMS")},
+		}})
+	}))
+	defer server.Close()
+	target := filepath.Join(t.TempDir(), "baron")
+	if err := os.WriteFile(target, []byte("current Baron 0.1.15"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	client := Client{HTTPClient: server.Client(), APIBaseURL: server.URL, Repository: "owner/repo", GOOS: "linux", GOARCH: "amd64", AllowInsecure: true}
+	report, err := client.InstallLatest(context.Background(), target, "0.1.15", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Changed || report.Version != "0.1.15" || counts["/repos/owner/repo/releases/latest"] != 1 {
+		t.Fatalf("unexpected newer-current report/counts: %#v %#v", report, counts)
+	}
+	for path, count := range counts {
+		if path != "/repos/owner/repo/releases/latest" && count != 0 {
+			t.Fatalf("newer current version fetched downgrade asset %s %d times", path, count)
+		}
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "current Baron 0.1.15" {
+		t.Fatalf("current binary changed during downgrade guard: %q", data)
+	}
+}
+
 func TestInstallLatestRejectsChecksumMismatchBeforeMutation(t *testing.T) {
 	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.0","artifacts":["baron-linux-amd64"]}`)
 	server := releaseFixtureServer(t, []byte("candidate"), manifest, []byte(strings.Repeat("0", 64)+"  baron-linux-amd64\n"+checksumLine(manifest, "release-manifest.json")+"\n"))

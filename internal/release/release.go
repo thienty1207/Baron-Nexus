@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -86,17 +87,25 @@ func (c Client) InstallLatest(ctx context.Context, target, currentVersion string
 	if err != nil {
 		return Report{}, err
 	}
-	if !force && strings.TrimSpace(currentVersion) == tagVersion {
-		info, statErr := os.Stat(target)
-		if statErr == nil {
-			if !info.Mode().IsRegular() {
-				return Report{}, fmt.Errorf("Baron install target is not a regular file: %s", target)
+	if !force {
+		if current, currentErr := normalizeReleaseVersion(currentVersion); currentErr == nil {
+			if comparison, compareErr := compareReleaseVersions(current, tagVersion); compareErr == nil && comparison >= 0 {
+				info, statErr := os.Stat(target)
+				if statErr == nil {
+					if !info.Mode().IsRegular() {
+						return Report{}, fmt.Errorf("Baron install target is not a regular file: %s", target)
+					}
+					if comparison == 0 {
+						c.step(fmt.Sprintf("Baron %s is already up to date.", current))
+					} else {
+						c.step(fmt.Sprintf("Baron %s is newer than latest release %s; leaving it unchanged.", current, tagVersion))
+					}
+					return Report{Version: current, Target: target, Changed: false}, nil
+				}
+				if !errors.Is(statErr, os.ErrNotExist) {
+					return Report{}, fmt.Errorf("inspect Baron install target: %w", statErr)
+				}
 			}
-			c.step(fmt.Sprintf("Baron %s is already up to date.", tagVersion))
-			return Report{Version: tagVersion, Target: target, Changed: false}, nil
-		}
-		if !errors.Is(statErr, os.ErrNotExist) {
-			return Report{}, fmt.Errorf("inspect Baron install target: %w", statErr)
 		}
 	}
 
@@ -348,6 +357,36 @@ func normalizeReleaseVersion(value string) (string, error) {
 		}
 	}
 	return value, nil
+}
+
+func compareReleaseVersions(left, right string) (int, error) {
+	left, err := normalizeReleaseVersion(left)
+	if err != nil {
+		return 0, err
+	}
+	right, err = normalizeReleaseVersion(right)
+	if err != nil {
+		return 0, err
+	}
+	leftParts := strings.Split(left, ".")
+	rightParts := strings.Split(right, ".")
+	for index := range leftParts {
+		leftNumber, leftErr := strconv.Atoi(leftParts[index])
+		if leftErr != nil {
+			return 0, fmt.Errorf("invalid Baron release version %q", left)
+		}
+		rightNumber, rightErr := strconv.Atoi(rightParts[index])
+		if rightErr != nil {
+			return 0, fmt.Errorf("invalid Baron release version %q", right)
+		}
+		if leftNumber < rightNumber {
+			return -1, nil
+		}
+		if leftNumber > rightNumber {
+			return 1, nil
+		}
+	}
+	return 0, nil
 }
 
 func checksumFor(data []byte, assetName string) (string, error) {

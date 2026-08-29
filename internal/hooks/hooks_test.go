@@ -511,6 +511,52 @@ func TestMeaningfulTaskFailureQueuesBoundedStructuredSummary(t *testing.T) {
 	}
 }
 
+func TestTypedOnlyRuntimeDoesNotQueueMemoryCaptureWithoutBackend(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-typed-only-hook-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "typed-only hook"}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(store, continuity.NewEngine(store, projectID, "typed-only hook", filepath.Join(root, "checkpoint.json")), projectID)
+	runtime.isolation = contracts.IsolationContext{ProjectID: projectID, TeamID: "team", AgentID: "agent", UserID: "user"}
+	var operations []storage.QueueItem
+	runtime.SetQueueOperationHandler(func(_ context.Context, item storage.QueueItem) (string, error) {
+		operations = append(operations, item)
+		return item.Operation + "-request", nil
+	})
+	startResponse, startErr := runtime.Handle(context.Background(), Request{
+		Client: contracts.ClientCodex, Event: contracts.EventTaskStarted, ProjectID: projectID,
+		SessionID: "typed-only-session", IdempotencyKey: "typed-only-start",
+		Payload: json.RawMessage(`{"task_id":"typed-only-task","goal":"typed-only task","status":"in_progress"}`),
+	})
+	if startErr != nil || !startResponse.OK {
+		t.Fatalf("typed-only task start failed: %#v %v", startResponse, startErr)
+	}
+	response, err := runtime.Handle(context.Background(), Request{
+		Client: contracts.ClientCodex, Event: contracts.EventTaskFailed, ProjectID: projectID,
+		SessionID: "typed-only-session", IdempotencyKey: "typed-only-failed",
+		Payload: json.RawMessage(`{"task_id":"typed-only-task","status":"failed","summary":"typed summary"}`),
+	})
+	if err != nil || !response.OK {
+		t.Fatalf("typed-only task failure failed: %#v %v", response, err)
+	}
+	if len(operations) != 2 {
+		t.Fatalf("typed-only runtime emitted unexpected operations: %#v", operations)
+	}
+	pending, err := store.QueueCount(context.Background(), projectID, "pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("typed-only runtime left memory work queued without a backend: %d", pending)
+	}
+}
+
 func TestRemoteRecallUsesLocalCacheForUnchangedFingerprint(t *testing.T) {
 	root := t.TempDir()
 	projectID := "prj-recall-cache-hook-12345678"
@@ -867,6 +913,44 @@ func TestContinuityRecallAndMemoryCaptureIncludeRelevantRepositoryEvidence(t *te
 	record, ok := memoryRecord(request, state)
 	if !ok || !strings.Contains(record.Content, "JWT refresh flow") || len(record.EvidenceRefs) != 3 || record.Metadata["symbol"] != "RefreshToken" {
 		t.Fatalf("memory record omitted task evidence: %#v ok=%v", record, ok)
+	}
+}
+
+func TestNormalizeLifecyclePayloadBoundsLargeToolOutput(t *testing.T) {
+	largeOutput := strings.Repeat("build output ", 20000) + "\nexit code: 17"
+	raw, err := json.Marshal(map[string]any{
+		"tool_name":     "shell",
+		"tool_input":    map[string]any{"command": "cargo build --release"},
+		"tool_response": largeOutput,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	normalized, err := normalizeLifecyclePayload(raw, contracts.EventToolFinished)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const wantMaxHookPayloadBytes = 64 * 1024
+	if len(normalized) > wantMaxHookPayloadBytes {
+		t.Fatalf("normalized hook payload=%d bytes, want <= %d", len(normalized), wantMaxHookPayloadBytes)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(normalized, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["command"] != "cargo build --release" {
+		t.Fatalf("command evidence was lost: %#v", payload["command"])
+	}
+	if payload["status"] != "failed" {
+		t.Fatalf("failure status was not inferred: %#v", payload["status"])
+	}
+	if exitCode, ok := payload["exit_code"].(float64); !ok || int(exitCode) != 17 {
+		t.Fatalf("exit code evidence was not preserved: %#v", payload["exit_code"])
+	}
+	toolOutput, _ := payload["tool_output"].(string)
+	if !strings.Contains(toolOutput, "exit code: 17") {
+		t.Fatalf("tail failure evidence was lost: %q", toolOutput)
 	}
 }
 

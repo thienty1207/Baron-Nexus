@@ -40,6 +40,8 @@ func TestBootstrapCompletionMessageOnlyRequestsMissingCodexAuth(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("PATH", t.TempDir())
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", t.TempDir())
+	t.Setenv("APPDATA", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("CODEX_HOME", t.TempDir())
 	if message := bootstrapCompletionMessage("Baron release ready."); !strings.Contains(message, "ACTION REQUIRED") {
