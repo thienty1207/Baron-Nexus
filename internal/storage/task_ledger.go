@@ -92,6 +92,17 @@ var taskLedgerSchemaStatements = []string{
 		updated_at TEXT NOT NULL,
 		FOREIGN KEY(project_id, task_id) REFERENCES tasks(project_id, task_id) ON DELETE CASCADE
 	)`,
+	`CREATE TABLE IF NOT EXISTS remote_recall_cache (
+		project_id TEXT NOT NULL REFERENCES projects(project_id) ON DELETE CASCADE,
+		session_id TEXT NOT NULL DEFAULT '',
+		fingerprint TEXT NOT NULL,
+		query_hash TEXT NOT NULL,
+		snapshot BLOB NOT NULL,
+		receipt_id TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL,
+		PRIMARY KEY(project_id, session_id, fingerprint, query_hash)
+	)`,
+	`CREATE INDEX IF NOT EXISTS remote_recall_cache_project ON remote_recall_cache(project_id, updated_at)`,
 }
 
 type TaskRecord struct {
@@ -869,13 +880,24 @@ func classifyTaskPath(path string) string {
 	lower := strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
 	base := filepath.Base(lower)
 	if strings.HasPrefix(lower, ".baron/") || strings.HasPrefix(lower, ".git/") ||
-		strings.HasPrefix(base, "generated") || strings.HasSuffix(base, ".gen.go") ||
-		strings.HasSuffix(base, ".generated.ts") || strings.HasSuffix(base, ".lock") ||
-		base == "package-lock.json" || base == "pnpm-lock.yaml" || base == "yarn.lock" ||
-		base == "go.sum" || base == "cargo.lock" || strings.HasSuffix(lower, ".md") {
+		strings.HasPrefix(lower, "docs/") || strings.HasPrefix(lower, "generated/") ||
+		strings.HasPrefix(base, "generated") || strings.HasPrefix(base, "readme") ||
+		strings.HasSuffix(base, ".gen.go") || strings.HasSuffix(base, ".generated.ts") ||
+		strings.HasSuffix(base, ".generated.go") || strings.HasSuffix(base, ".pb.go") ||
+		strings.HasSuffix(base, ".lock") || base == "package-lock.json" ||
+		base == "pnpm-lock.yaml" || base == "yarn.lock" || base == "go.sum" ||
+		base == "cargo.lock" || strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".rst") ||
+		strings.HasSuffix(lower, ".json") || strings.HasSuffix(lower, ".yaml") ||
+		strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".toml") {
 		return "weak"
 	}
 	return "strong"
+}
+
+// TaskFileStrength exposes the deterministic strong/weak classification used
+// by the Resume Gate without exposing storage implementation details.
+func TaskFileStrength(path string) string {
+	return classifyTaskPath(path)
 }
 
 func boundedTaskText(value string, max int) string {

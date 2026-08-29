@@ -354,6 +354,89 @@ func (b *sessionAgnosticMemoryBackend) Search(_ context.Context, isolation contr
 	return []contracts.MemoryRecord{{ProjectID: isolation.ProjectID, SourceClient: contracts.ClientCodex, Kind: "handoff", Content: "CODEX_TO_DSH_PROJECT_SENTINEL"}}, nil
 }
 
+type countingRecallBackend struct {
+	searchCalls int
+}
+
+func (b *countingRecallBackend) Health(context.Context) error { return nil }
+func (b *countingRecallBackend) EnsureIdentity(context.Context, contracts.IdentitySpec) (contracts.Identity, error) {
+	return contracts.Identity{}, nil
+}
+func (b *countingRecallBackend) EnsureProjectAgent(context.Context, contracts.IsolationContext, string) (contracts.ProjectBinding, error) {
+	return contracts.ProjectBinding{}, nil
+}
+func (b *countingRecallBackend) Capture(context.Context, contracts.IsolationContext, contracts.MemoryRecord, string) (contracts.MemoryReceipt, error) {
+	return contracts.MemoryReceipt{}, nil
+}
+func (b *countingRecallBackend) Search(context.Context, contracts.IsolationContext, contracts.MemoryQuery) ([]contracts.MemoryRecord, error) {
+	b.searchCalls++
+	return []contracts.MemoryRecord{{Kind: "unexpected-remote", Content: "remote should not be queried"}}, nil
+}
+
+func TestLocalSufficientPromptSkipsRemoteRecall(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-local-only-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "local-only"}); err != nil {
+		t.Fatal(err)
+	}
+	engine := continuity.NewEngine(store, projectID, "local-only", filepath.Join(root, "checkpoint.json"))
+	if err := engine.Save(context.Background(), continuity.WorkState{
+		ProjectID:  projectID,
+		Repository: continuity.RepositoryEvidence{GitHead: "head-local", DiffHash: "diff-local", Branch: "main"},
+		Task:       continuity.TaskState{Status: contracts.TaskInProgress, Goal: "local task"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	backend := &countingRecallBackend{}
+	runtime := NewRuntime(store, engine, projectID)
+	runtime.SetMemoryBackend(backend, contracts.IsolationContext{ProjectID: projectID, TeamID: "team", AgentID: "agent", UserID: "user"})
+	response, err := runtime.Handle(context.Background(), Request{
+		Client: contracts.ClientCodex, Event: contracts.EventUserPrompt, ProjectID: projectID,
+		SessionID: "local-session", IdempotencyKey: "local-prompt", Payload: json.RawMessage(`{"task_id":"task-new","changed_files":["internal/new.go"],"module_paths":["internal/new"],"prompt":"continue local work"}`),
+	})
+	if err != nil || !response.OK {
+		t.Fatalf("local-only prompt failed: %#v %v", response, err)
+	}
+	if backend.searchCalls != 0 {
+		t.Fatalf("local-sufficient prompt queried remote memory %d times", backend.searchCalls)
+	}
+}
+
+func TestRemoteRecallUsesLocalCacheForUnchangedFingerprint(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-recall-cache-hook-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "recall cache hook"}); err != nil {
+		t.Fatal(err)
+	}
+	backend := &countingRecallBackend{}
+	runtime := NewRuntime(store, continuity.NewEngine(store, projectID, "recall cache hook", filepath.Join(root, "checkpoint.json")), projectID)
+	runtime.SetMemoryBackend(backend, contracts.IsolationContext{ProjectID: projectID, TeamID: "team", AgentID: "agent", UserID: "user"})
+	request := Request{
+		Client: contracts.ClientCodex, Event: contracts.EventUserPrompt, ProjectID: projectID,
+		SessionID: "same-session", Payload: json.RawMessage(`{"prompt":"recover the previous task"}`),
+	}
+	for index := 1; index <= 2; index++ {
+		request.IdempotencyKey = fmt.Sprintf("cached-prompt-%d", index)
+		response, handleErr := runtime.Handle(context.Background(), request)
+		if handleErr != nil || !response.OK {
+			t.Fatalf("cached prompt %d failed: %#v %v", index, response, handleErr)
+		}
+	}
+	if backend.searchCalls != 1 {
+		t.Fatalf("unchanged recovery fingerprint searched remote %d times", backend.searchCalls)
+	}
+}
+
 func TestRecallSearchIsProjectScopedRatherThanCurrentSessionScoped(t *testing.T) {
 	root := t.TempDir()
 	projectID := "prj-recall-scope-12345678"

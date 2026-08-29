@@ -54,6 +54,32 @@ func TestTaskLedgerMigrationAddsTablesToExistingSchema(t *testing.T) {
 	}
 }
 
+func TestRemoteRecallCacheIsScopedByRecoveryFingerprint(t *testing.T) {
+	store := openTaskTestStore(t)
+	ctx := context.Background()
+	projectID := "prj-recall-cache-12345678"
+	if err := store.RegisterProject(ctx, ProjectRecord{ProjectID: projectID, Root: t.TempDir(), Name: "recall cache"}); err != nil {
+		t.Fatal(err)
+	}
+	want := RemoteRecallCache{
+		ProjectID: projectID, SessionID: "session-a", Fingerprint: "fingerprint-a",
+		QueryHash: "query-a", Snapshot: []byte(`{"records":[{"id":"historical-a"}]}`), ReceiptID: "receipt-a",
+	}
+	if err := store.PutRemoteRecallCache(ctx, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetRemoteRecallCache(ctx, projectID, "session-a", "fingerprint-a", "query-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Snapshot) != string(want.Snapshot) || got.ReceiptID != want.ReceiptID {
+		t.Fatalf("recall cache mismatch: got=%#v want=%#v", got, want)
+	}
+	if _, err := store.GetRemoteRecallCache(ctx, projectID, "session-a", "fingerprint-b", "query-a"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("changed recovery fingerprint reused cache: %v", err)
+	}
+}
+
 func TestTaskLedgerProjectsLifecycleAndVerificationScope(t *testing.T) {
 	store := openTaskTestStore(t)
 	ctx := context.Background()

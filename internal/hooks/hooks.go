@@ -215,6 +215,7 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 	if err := r.engine.Save(ctx, state); err != nil {
 		return response, err
 	}
+	resumeDecision, ledgerTasks := r.resumeDecision(ctx, request, state, loadErr == nil)
 	response.OK = true
 	response.Persisted = true
 	if previousState != nil {
@@ -239,6 +240,14 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 			response.Context += handoff
 			response.Historical = true
 		}
+		if resumeDecision.Outcome != continuity.ResumeRemoteRecoveryRequired || len(ledgerTasks) > 0 || r.backend != nil || r.knowledge != nil {
+			if localContext := continuity.BuildLocalResumeContext(state, ledgerTasks, resumeDecision, 5000); localContext != "" {
+				if response.Context != "" {
+					response.Context += "\n"
+				}
+				response.Context += localContext
+			}
+		}
 	}
 	// The local event and checkpoint are durable before this point. Remote
 	// capture/recall is deliberately best-effort so memory outages never stop
@@ -250,16 +259,30 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 	// separate manual repair command, while the bounded context keeps the
 	// provider session fail-open when Tencent is slow or unavailable.
 	r.flushRemoteQueue(ctx)
-	if (r.backend != nil || r.knowledge != nil) && shouldRecall(request.Event) {
+	if (r.backend != nil || r.knowledge != nil) && shouldRecall(request.Event) && resumeDecision.Outcome == continuity.ResumeRemoteRecoveryRequired {
 		requestIsolation := r.isolation
 		// Recall is project-scoped by design. The current session is the
 		// consumer of historical context, not a filter for the previous
 		// agent's records; applying it here would make cross-agent handoff
 		// invisible immediately after a session switch.
 		requestIsolation.SessionID = ""
-		memoryCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
-		packet, packetErr := continuity.BuildContextWithKnowledge(memoryCtx, state, r.backend, r.knowledge, requestIsolation, recallQuery(request, state), 5000, r.secrets)
-		cancel()
+		query := recallQuery(request, state)
+		queryHash := recallQueryHash(query)
+		packet, packetErr := r.cachedRemoteContext(ctx, request.SessionID, resumeDecision.RecoveryFingerprint, queryHash)
+		if packetErr != nil {
+			memoryCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+			packet, packetErr = continuity.BuildContextWithKnowledge(memoryCtx, state, r.backend, r.knowledge, requestIsolation, query, 5000, r.secrets)
+			cancel()
+			if packetErr == nil && packet.RemoteError == "" {
+				if snapshot, marshalErr := json.Marshal(packet); marshalErr == nil {
+					_ = r.store.PutRemoteRecallCache(ctx, storage.RemoteRecallCache{
+						ProjectID: request.ProjectID, SessionID: request.SessionID,
+						Fingerprint: resumeDecision.RecoveryFingerprint, QueryHash: queryHash,
+						Snapshot: snapshot, ReceiptID: "search-" + queryHash,
+					})
+				}
+			}
+		}
 		if packetErr == nil {
 			response.Historical = len(packet.Records) > 0
 			if response.Context != "" {
@@ -269,6 +292,40 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 		}
 	}
 	return response, nil
+}
+
+func (r *Runtime) resumeDecision(ctx context.Context, request Request, state continuity.WorkState, localStateReadable bool) (continuity.ResumeDecision, []storage.TaskRecord) {
+	if r == nil || r.store == nil {
+		return continuity.EvaluateResumeGate(continuity.ResumeGateInput{LocalStateReadable: false}), nil
+	}
+	tasks, err := r.store.ListTasks(ctx, request.ProjectID, []contracts.TaskStatus{
+		contracts.TaskPlanned, contracts.TaskInProgress, contracts.TaskBlocked,
+		contracts.TaskFailed, contracts.TaskInterrupted,
+	}, 100)
+	ledgerReadable := err == nil
+	return continuity.EvaluateResumeGate(continuity.ResumeGateInput{
+		LocalStateReadable:        localStateReadable,
+		LedgerReadable:            ledgerReadable,
+		Repository:                state.Repository,
+		UnresolvedTasks:           tasks,
+		RequestedTask:             resumeTaskScope(request.Payload),
+		HistoricalRecallRequested: payloadBool(request.Payload, "historical_recall", "remote_recall", "historical_request"),
+	}), tasks
+}
+
+func (r *Runtime) cachedRemoteContext(ctx context.Context, sessionID, fingerprint, queryHash string) (continuity.ContextPacket, error) {
+	if r == nil || r.store == nil {
+		return continuity.ContextPacket{}, sql.ErrNoRows
+	}
+	cache, err := r.store.GetRemoteRecallCache(ctx, r.projectID, sessionID, fingerprint, queryHash)
+	if err != nil {
+		return continuity.ContextPacket{}, err
+	}
+	var packet continuity.ContextPacket
+	if err := json.Unmarshal(cache.Snapshot, &packet); err != nil {
+		return continuity.ContextPacket{}, fmt.Errorf("decode cached remote context: %w", err)
+	}
+	return packet, nil
 }
 
 func (r *Runtime) latestOtherClientContext(ctx context.Context, projectID string, currentClient contracts.HookClient) string {
@@ -474,6 +531,67 @@ func recallQuery(request Request, state continuity.WorkState) contracts.MemoryQu
 	}
 	return contracts.MemoryQuery{Text: boundedText(strings.Join(terms, " "), 4000), Limit: 10, Kinds: kinds,
 		Files: boundedValues(files, 8, 1024), Symbols: boundedValues(symbols, 4, 512)}
+}
+
+func recallQueryHash(query contracts.MemoryQuery) string {
+	data, err := json.Marshal(query)
+	if err != nil {
+		return contracts.HashContent(query.Text)
+	}
+	return contracts.HashContent(string(data))
+}
+
+func resumeTaskScope(raw json.RawMessage) continuity.ResumeTaskScope {
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil {
+		return continuity.ResumeTaskScope{}
+	}
+	scope := continuity.ResumeTaskScope{
+		TaskID:        payloadString(payload, "task_id"),
+		Goal:          payloadString(payload, "goal"),
+		ChangedFiles:  payloadStrings(payload, "changed_files"),
+		ModulePaths:   payloadStrings(payload, "module_paths"),
+		Dependencies:  payloadStrings(payload, "dependencies"),
+		GitHead:       payloadString(payload, "git_head"),
+		DiffHash:      payloadString(payload, "diff_hash"),
+		ExplicitScope: payloadBool(raw, "task_scope_explicit"),
+	}
+	if file := payloadString(payload, "file"); file != "" {
+		scope.ChangedFiles = append(scope.ChangedFiles, file)
+	}
+	if module := payloadString(payload, "module_path"); module != "" {
+		scope.ModulePaths = append(scope.ModulePaths, module)
+	}
+	return scope
+}
+
+func payloadString(payload map[string]any, key string) string {
+	value, _ := payload[key].(string)
+	return boundedText(value, 2048)
+}
+
+func payloadStrings(payload map[string]any, key string) []string {
+	values, _ := payload[key].([]any)
+	result := make([]string, 0, len(values))
+	for _, item := range values {
+		if value, ok := item.(string); ok && strings.TrimSpace(value) != "" {
+			result = append(result, boundedText(value, 1024))
+		}
+	}
+	return result
+}
+
+func payloadBool(raw json.RawMessage, keys ...string) bool {
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil {
+		return false
+	}
+	for _, key := range keys {
+		if value, ok := payload[key].(bool); ok && value {
+			return true
+		}
+	}
+	return false
 }
 
 func boundedValues(values []string, limit, maxLength int) []string {
