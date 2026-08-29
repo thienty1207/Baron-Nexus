@@ -283,6 +283,32 @@ instructions outside that block. It contains no credentials or runtime secrets.
 and is mode 0600 on Unix. `.baron/runtime/state.db` is the local SQLite WAL
 authority; `checkpoint.json` is a readable materialized snapshot.
 
+### Local continuity evidence
+
+Baron keeps authority boundaries explicit: Git and the working tree describe
+current source, SQLite owns canonical lifecycle/task/checkpoint events, and
+Tencent is historical/recovery reference only. `task_started` creates or
+resumes a structured task; `task_updated` only updates an existing `task_id`.
+Verification is scoped (`unit`, `integration`, `build`, `acceptance`, or
+`completion`), and only evidence allowed by the task completion policy can
+promote a task to completed.
+
+Use these local-only views when checking what Codex or DSH last did:
+
+```text
+baron status
+baron timeline --limit 50
+baron timeline --limit 100 --json
+```
+
+They read Git and SQLite without an LLM or Tencent request. Prompts, minor tool
+events, and long raw tool output stay local; only bounded summaries for task
+failure/block, verified completion, important test/build evidence, interruption,
+clean close, or explicit handoff are queued to Tencent. If local evidence is
+complete, same-session and Codex/DSH handoff remain local-only. Tencent recall is
+conditional, cached by the local recovery fingerprint, and never overwrites the
+local task projection.
+
 ## Support operations
 
 `baron status`, `baron doctor`, `baron repair`, `baron backup <destination>`,
