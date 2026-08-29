@@ -653,9 +653,20 @@ func renderLocalStatus(snapshot localStatusSnapshot, jsonOutput bool) (string, e
 		return string(append(data, '\n')), nil
 	}
 	var builder strings.Builder
-	fmt.Fprintf(&builder, "Authority: Git working tree + SQLite task ledger (Tencent not queried)\nProject: %s\nProject ID: %s\nRoot: %s\n", snapshot.ProjectName, snapshot.ProjectID, snapshot.Root)
+	fmt.Fprintf(&builder, "Authority: Git working tree + SQLite task ledger (Tencent not queried)\nProject: %s\nProject ID: %s\nRoot: %s\nTeam: %s\nAgent: %s\n", snapshot.ProjectName, snapshot.ProjectID, snapshot.Root, snapshot.TeamID, snapshot.AgentID)
 	if snapshot.Repository.Branch != "" || snapshot.Repository.GitHead != "" {
-		fmt.Fprintf(&builder, "Repository: branch=%s head=%s changed_files=%d\n", snapshot.Repository.Branch, snapshot.Repository.GitHead, len(snapshot.Repository.ChangedFiles))
+		dirty := "clean"
+		if len(snapshot.Repository.ChangedFiles) > 0 {
+			dirty = "dirty"
+		}
+		fmt.Fprintf(&builder, "Repository: branch=%s head=%s state=%s changed_files=%d diff_hash=%s\n", snapshot.Repository.Branch, snapshot.Repository.GitHead, dirty, len(snapshot.Repository.ChangedFiles), snapshot.Repository.DiffHash)
+		if len(snapshot.Repository.ChangedFiles) > 0 {
+			files := snapshot.Repository.ChangedFiles
+			if len(files) > 12 {
+				files = files[:12]
+			}
+			fmt.Fprintf(&builder, "Changed files: %s\n", strings.Join(files, ", "))
+		}
 	} else if snapshot.RepositoryError != "" {
 		fmt.Fprintf(&builder, "Repository: unavailable (%s)\n", snapshot.RepositoryError)
 	} else {
@@ -666,8 +677,24 @@ func renderLocalStatus(snapshot localStatusSnapshot, jsonOutput bool) (string, e
 		fmt.Fprintf(&builder, " (%s)", snapshot.LocalState.SessionID)
 	}
 	builder.WriteByte('\n')
+	if snapshot.LocalState.LatestTest.Command != "" || snapshot.LocalState.LatestTest.Summary != "" {
+		fmt.Fprintf(&builder, "Latest test/build: command=%s status=%s", snapshot.LocalState.LatestTest.Command, snapshot.LocalState.LatestTest.Status)
+		if snapshot.LocalState.LatestTest.ExitCode != nil {
+			fmt.Fprintf(&builder, " exit=%d", *snapshot.LocalState.LatestTest.ExitCode)
+		}
+		if snapshot.LocalState.LatestTest.ObservedAt != "" {
+			fmt.Fprintf(&builder, " observed_at=%s", snapshot.LocalState.LatestTest.ObservedAt)
+		}
+		if snapshot.LocalState.LatestTest.Summary != "" {
+			fmt.Fprintf(&builder, " - %s", snapshot.LocalState.LatestTest.Summary)
+		}
+		builder.WriteByte('\n')
+	}
 	if snapshot.ActiveTask != nil {
-		fmt.Fprintf(&builder, "Active task: %s [%s] %s\n", snapshot.ActiveTask.TaskID, snapshot.ActiveTask.Status, snapshot.ActiveTask.CurrentStep)
+		fmt.Fprintf(&builder, "Active task: %s [%s] step=%s next=%s\n", snapshot.ActiveTask.TaskID, snapshot.ActiveTask.Status, snapshot.ActiveTask.CurrentStep, snapshot.ActiveTask.NextAction)
+		if snapshot.ActiveTask.LatestErrorRef != "" {
+			fmt.Fprintf(&builder, "Latest error ref: %s\n", snapshot.ActiveTask.LatestErrorRef)
+		}
 	}
 	fmt.Fprintf(&builder, "Unresolved tasks: %d\n", len(snapshot.UnresolvedTasks))
 	for _, task := range snapshot.UnresolvedTasks {
@@ -679,6 +706,9 @@ func renderLocalStatus(snapshot localStatusSnapshot, jsonOutput bool) (string, e
 	}
 	if snapshot.TencentDeployment != nil {
 		fmt.Fprintf(&builder, "Tencent deployment metadata: %v @ %v (local manifest only)\n", snapshot.TencentDeployment["resolved_commit"], snapshot.TencentDeployment["repository"])
+	}
+	if snapshot.Knowledge != nil {
+		fmt.Fprintf(&builder, "Tencent sync metadata (local): wiki=%v codegraph=%v pending=%v dead-letter=%v\n", snapshot.Knowledge["wiki_status"], snapshot.Knowledge["code_graph_status"], snapshot.Knowledge["pending_queue"], snapshot.Knowledge["dead_letter_queue"])
 	}
 	return builder.String(), nil
 }
@@ -714,8 +744,14 @@ func (a *App) timelineOutput(limit int, jsonOutput bool) (string, error) {
 	fmt.Fprintf(&builder, "Local timeline: %d events (SQLite; raw payload hidden)\n", len(events))
 	for _, event := range events {
 		fmt.Fprintf(&builder, "[%s] %s %s", event.OccurredAt.Format(time.RFC3339), event.Client, event.Type)
+		if event.SessionID != "" {
+			fmt.Fprintf(&builder, " session=%s", event.SessionID)
+		}
 		if event.TaskID != "" {
 			fmt.Fprintf(&builder, " task=%s", event.TaskID)
+		}
+		if event.Command != "" {
+			fmt.Fprintf(&builder, " command=%s", event.Command)
 		}
 		if event.Status != "" {
 			fmt.Fprintf(&builder, " status=%s", event.Status)

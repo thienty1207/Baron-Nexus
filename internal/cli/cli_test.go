@@ -18,7 +18,7 @@ func TestCLIExposesFrozenCommandSurface(t *testing.T) {
 	}
 	for _, text := range []string{
 		"deepseek-harness", "codex-cli", "tencent-memory", "test", "setup",
-		"status", "doctor", "repair", "backup", "restore", "install", "update",
+		"status", "timeline", "doctor", "repair", "backup", "restore", "install", "update",
 		"credentials", "deepseek", "permissions", "uninstall",
 	} {
 		if !strings.Contains(out.String(), text) {

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +31,7 @@ import (
 	"github.com/baron-shared-brain/baron/internal/project"
 	"github.com/baron-shared-brain/baron/internal/release"
 	"github.com/baron-shared-brain/baron/internal/storage"
+	"github.com/baron-shared-brain/baron/internal/version"
 )
 
 func TestReleaseHTTPClientUsesArtifactTimeoutWithoutMutatingBase(t *testing.T) {
@@ -578,15 +580,16 @@ func TestCLIOptionsUpdateUsesVerifiedReleaseWithoutProjectState(t *testing.T) {
 	if err := os.WriteFile(target, []byte("old Baron binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	candidate := []byte("#!/bin/sh\necho 'baron 0.1.14'\n")
-	manifest := []byte(`{"project":"Baron Nexus","version":"0.1.14","artifacts":["baron-linux-amd64"]}`)
+	fixtureVersion := nextPatchVersion(version.Value)
+	candidate := []byte(fmt.Sprintf("#!/bin/sh\necho 'baron %s'\n", fixtureVersion))
+	manifest := []byte(fmt.Sprintf(`{"project":"Baron Nexus","version":"%s","artifacts":["baron-linux-amd64"]}`, fixtureVersion))
 	sum := sha256.Sum256(candidate)
 	sums := []byte(fmt.Sprintf("%s  baron-linux-amd64\n", hex.EncodeToString(sum[:])))
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/repos/owner/repo/releases/latest":
 			_ = json.NewEncoder(writer).Encode(map[string]any{
-				"tag_name": "v0.1.14",
+				"tag_name": "v" + fixtureVersion,
 				"assets": []map[string]string{
 					{"name": "baron-linux-amd64", "browser_download_url": "http://" + request.Host + "/download/baron-linux-amd64"},
 					{"name": "release-manifest.json", "browser_download_url": "http://" + request.Host + "/download/release-manifest.json"},
@@ -633,6 +636,19 @@ func TestCLIOptionsUpdateUsesVerifiedReleaseWithoutProjectState(t *testing.T) {
 	if _, err := os.Stat(application.GlobalPath); !os.IsNotExist(err) {
 		t.Fatalf("binary update touched global Baron state: %v", err)
 	}
+}
+
+func nextPatchVersion(value string) string {
+	parts := strings.Split(value, ".")
+	if len(parts) != 3 {
+		return "0.1.1"
+	}
+	patch, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return "0.1.1"
+	}
+	parts[2] = strconv.Itoa(patch + 1)
+	return strings.Join(parts, ".")
 }
 
 func TestCodexHookWrapsRecoveryContextInHookSpecificOutput(t *testing.T) {
