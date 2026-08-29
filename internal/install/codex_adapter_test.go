@@ -21,7 +21,7 @@ func TestInstallEmbeddedCodexAdapterMaterializesPrivateBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, marker := range []string{"baron hook codex", "SessionStart", "SessionEnd", "timeout"} {
+	for _, marker := range []string{"baron hook codex", "SessionStart", "SessionEnd", "timeout", "task_id", "verification_kind"} {
 		if !strings.Contains(string(data), marker) {
 			t.Fatalf("Codex adapter missing protocol marker %q", marker)
 		}

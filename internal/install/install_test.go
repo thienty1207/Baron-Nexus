@@ -477,6 +477,15 @@ func TestEmbeddedDSHAdapterMaterializesPrivateBaronOwnedPackage(t *testing.T) {
 			t.Fatalf("embedded adapter file %s missing: %v", name, err)
 		}
 	}
+	data, err := os.ReadFile(filepath.Join(target, "index.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"task_id", "verification_kind", "onTaskStarted", "onTaskCompleted"} {
+		if !strings.Contains(string(data), marker) {
+			t.Fatalf("DSH adapter missing structured task marker %q", marker)
+		}
+	}
 	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("adapter target permissions are not private: info=%v err=%v", info, err)
 	}

@@ -12,7 +12,15 @@ export const CODEX_EVENTS = Object.freeze([
   "PostCompact",
   "Stop",
   "SessionEnd",
+  "task_started",
+  "task_updated",
+  "task_failed",
+  "task_blocked",
+  "task_verified",
+  "task_completed",
+  "task_interrupted",
 ]);
+export const TASK_FIELDS = Object.freeze(["task_id", "active_task_id", "completion_policy", "verification_ref", "verification_kind", "verification_scope"]);
 
 const EVENT_NAMES = new Set(CODEX_EVENTS);
 
@@ -30,16 +38,35 @@ export function createCodexAdapter(options = {}) {
   return {
     name,
     version,
-    onEvent: (event, payload) => invoke(binary, cwd, timeoutMs, normalizeEvent(event), payload),
-    onSessionStart: (payload) => invoke(binary, cwd, timeoutMs, "SessionStart", payload),
-    onUserPrompt: (payload) => invoke(binary, cwd, timeoutMs, "UserPromptSubmit", payload),
-    onPreToolUse: (payload) => invoke(binary, cwd, timeoutMs, "PreToolUse", payload),
-    onPostToolUse: (payload) => invoke(binary, cwd, timeoutMs, "PostToolUse", payload),
-    onPreCompact: (payload) => invoke(binary, cwd, timeoutMs, "PreCompact", payload),
-    onPostCompact: (payload) => invoke(binary, cwd, timeoutMs, "PostCompact", payload),
-    onStop: (payload) => invoke(binary, cwd, timeoutMs, "Stop", payload),
-    onSessionEnd: (payload) => invoke(binary, cwd, timeoutMs, "SessionEnd", payload),
+    onEvent: (event, payload) => invoke(binary, cwd, timeoutMs, normalizeEvent(event), normalizeTaskPayload(payload)),
+    onSessionStart: (payload) => invoke(binary, cwd, timeoutMs, "SessionStart", normalizeTaskPayload(payload)),
+    onUserPrompt: (payload) => invoke(binary, cwd, timeoutMs, "UserPromptSubmit", normalizeTaskPayload(payload)),
+    onPreToolUse: (payload) => invoke(binary, cwd, timeoutMs, "PreToolUse", normalizeTaskPayload(payload)),
+    onPostToolUse: (payload) => invoke(binary, cwd, timeoutMs, "PostToolUse", normalizeTaskPayload(payload)),
+    onPreCompact: (payload) => invoke(binary, cwd, timeoutMs, "PreCompact", normalizeTaskPayload(payload)),
+    onPostCompact: (payload) => invoke(binary, cwd, timeoutMs, "PostCompact", normalizeTaskPayload(payload)),
+    onStop: (payload) => invoke(binary, cwd, timeoutMs, "Stop", normalizeTaskPayload(payload)),
+    onSessionEnd: (payload) => invoke(binary, cwd, timeoutMs, "SessionEnd", normalizeTaskPayload(payload)),
+    onTaskStarted: (payload) => invoke(binary, cwd, timeoutMs, "task_started", normalizeTaskPayload(payload)),
+    onTaskUpdated: (payload) => invoke(binary, cwd, timeoutMs, "task_updated", normalizeTaskPayload(payload)),
+    onTaskFailed: (payload) => invoke(binary, cwd, timeoutMs, "task_failed", normalizeTaskPayload(payload)),
+    onTaskBlocked: (payload) => invoke(binary, cwd, timeoutMs, "task_blocked", normalizeTaskPayload(payload)),
+    onTaskVerified: (payload) => invoke(binary, cwd, timeoutMs, "task_verified", normalizeTaskPayload(payload)),
+    onTaskCompleted: (payload) => invoke(binary, cwd, timeoutMs, "task_completed", normalizeTaskPayload(payload)),
+    onTaskInterrupted: (payload) => invoke(binary, cwd, timeoutMs, "task_interrupted", normalizeTaskPayload(payload)),
   };
+}
+
+function normalizeTaskPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
+  const root = { ...payload };
+  const task = root.task && typeof root.task === "object" && !Array.isArray(root.task) ? root.task : {};
+  if (!root.task_id && (root.taskId || task.task_id || task.id)) root.task_id = root.taskId || task.task_id || task.id;
+  if (!root.active_task_id && root.activeTaskId) root.active_task_id = root.activeTaskId;
+  for (const field of ["completion_policy", "verification_ref", "verification_kind", "verification_scope"]) {
+    if (root[field] === undefined && task[field] !== undefined) root[field] = task[field];
+  }
+  return root;
 }
 
 function invoke(binary, cwd, timeoutMs, event, payload) {

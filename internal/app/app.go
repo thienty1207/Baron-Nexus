@@ -1156,6 +1156,20 @@ func canonicalEvent(value string) contracts.EventType {
 		return contracts.EventTestFinished
 	case "error_observed":
 		return contracts.EventErrorObserved
+	case "taskstarted", "task_started":
+		return contracts.EventTaskStarted
+	case "taskupdated", "task_updated":
+		return contracts.EventTaskUpdated
+	case "taskfailed", "task_failed":
+		return contracts.EventTaskFailed
+	case "taskblocked", "task_blocked":
+		return contracts.EventTaskBlocked
+	case "taskverified", "task_verified":
+		return contracts.EventTaskVerified
+	case "taskcompleted", "task_completed":
+		return contracts.EventTaskCompleted
+	case "taskinterrupted", "task_interrupted":
+		return contracts.EventTaskInterrupted
 	default:
 		return contracts.EventType(key)
 	}

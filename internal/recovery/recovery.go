@@ -10,26 +10,31 @@ import (
 )
 
 type RecoveryPacket struct {
-	SchemaVersion      int
-	ProjectID          string
-	ProjectName        string
-	PreviousClient     contracts.HookClient
-	PreviousSession    string
-	Interruption       string
-	Goal               string
-	Status             contracts.TaskStatus
-	LastSuccessfulStep string
-	CurrentStep        string
-	SafeNextAction     string
-	ChangedFiles       []string
-	GitHeadThen        string
-	GitHeadNow         string
-	RepositoryDrift    bool
-	TestCommand        string
-	TestStatus         string
-	TestSummary        string
-	Errors             []continuity.ErrorEvidence
-	MemoryCitations    []string
+	SchemaVersion           int
+	ProjectID               string
+	ProjectName             string
+	PreviousClient          contracts.HookClient
+	PreviousSession         string
+	Interruption            string
+	Goal                    string
+	TaskID                  string
+	Status                  contracts.TaskStatus
+	CompletionPolicy        contracts.CompletionPolicy
+	CompletionVerified      bool
+	LatestVerificationKind  contracts.VerificationKind
+	LatestVerificationScope string
+	LastSuccessfulStep      string
+	CurrentStep             string
+	SafeNextAction          string
+	ChangedFiles            []string
+	GitHeadThen             string
+	GitHeadNow              string
+	RepositoryDrift         bool
+	TestCommand             string
+	TestStatus              string
+	TestSummary             string
+	Errors                  []continuity.ErrorEvidence
+	MemoryCitations         []string
 }
 
 func Build(state continuity.WorkState, current continuity.RepositoryEvidence, memoryCitations []string) RecoveryPacket {
@@ -51,8 +56,11 @@ func Build(state continuity.WorkState, current continuity.RepositoryEvidence, me
 	return RecoveryPacket{
 		SchemaVersion: 1, ProjectID: state.ProjectID, ProjectName: state.ProjectName,
 		PreviousClient: state.LastClient, PreviousSession: state.SessionID, Interruption: interruption,
-		Goal: state.Task.Goal, Status: state.Task.Status, LastSuccessfulStep: state.Task.LastSuccessfulStep,
-		CurrentStep: state.Task.CurrentStep, SafeNextAction: state.Task.NextAction, ChangedFiles: files,
+		Goal: state.Task.Goal, TaskID: state.Task.TaskID, Status: state.Task.Status,
+		CompletionPolicy: state.Task.CompletionPolicy, CompletionVerified: state.Task.CompletionVerified,
+		LatestVerificationKind: state.Task.LatestVerificationKind, LatestVerificationScope: state.Task.LatestVerificationScope,
+		LastSuccessfulStep: state.Task.LastSuccessfulStep,
+		CurrentStep:        state.Task.CurrentStep, SafeNextAction: state.Task.NextAction, ChangedFiles: files,
 		GitHeadThen: state.Repository.GitHead, GitHeadNow: current.GitHead, RepositoryDrift: drift,
 		TestCommand: state.LatestTest.Command, TestStatus: state.LatestTest.Status, TestSummary: state.LatestTest.Summary,
 		Errors: append([]continuity.ErrorEvidence(nil), state.Errors...), MemoryCitations: append([]string(nil), memoryCitations...),
@@ -71,7 +79,17 @@ func (p RecoveryPacket) Render() string {
 	line("Previous session", p.PreviousSession)
 	line("Session", p.Interruption)
 	line("Goal", p.Goal)
+	line("Task ID", p.TaskID)
 	line("Status", string(p.Status))
+	line("Completion policy", string(p.CompletionPolicy))
+	if p.CompletionVerified {
+		line("Completion verification", "verified")
+	} else {
+		line("Completion verification", "not verified")
+	}
+	if p.LatestVerificationKind != "" {
+		line("Latest verification", string(p.LatestVerificationKind)+" (scope: "+p.LatestVerificationScope+")")
+	}
 	line("Last verified step", p.LastSuccessfulStep)
 	line("Current step", p.CurrentStep)
 	line("Safe next action", p.SafeNextAction)

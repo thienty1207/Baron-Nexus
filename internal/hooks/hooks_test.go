@@ -437,6 +437,44 @@ func TestRemoteRecallUsesLocalCacheForUnchangedFingerprint(t *testing.T) {
 	}
 }
 
+func TestStructuredTaskHandshakeKeepsTaskIdentityInCheckpoint(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-structured-task-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "structured task"}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(store, continuity.NewEngine(store, projectID, "structured task", filepath.Join(root, "checkpoint.json")), projectID)
+	start := Request{
+		Client: contracts.ClientCodex, Event: contracts.EventTaskStarted, ProjectID: projectID,
+		SessionID: "task-session", IdempotencyKey: "task-start", Payload: json.RawMessage(`{"task_id":"task-a","goal":"implement adapter context","status":"in_progress","module_paths":["internal/hooks"],"completion_policy":"completion"}`),
+	}
+	if response, handleErr := runtime.Handle(context.Background(), start); handleErr != nil || !response.OK {
+		t.Fatalf("task handshake failed: %#v %v", response, handleErr)
+	}
+	if response, handleErr := runtime.Handle(context.Background(), Request{
+		Client: contracts.ClientCodex, Event: contracts.EventToolFinished, ProjectID: projectID,
+		SessionID: "task-session", IdempotencyKey: "task-tool", Payload: json.RawMessage(`{"task_id":"task-a","command":"go test ./internal/hooks","exit_code":0}`),
+	}); handleErr != nil || !response.OK {
+		t.Fatalf("task evidence failed: %#v %v", response, handleErr)
+	}
+	state, err := runtime.Engine().Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.ActiveTaskID != "task-a" || state.Task.TaskID != "task-a" || state.Task.Goal != "implement adapter context" || state.Task.CompletionPolicy != contracts.CompletionPolicyCompletion {
+		t.Fatalf("checkpoint lost structured task identity: %#v", state)
+	}
+	task, err := store.GetTask(context.Background(), projectID, "task-a")
+	if err != nil || task.Status != contracts.TaskInProgress {
+		t.Fatalf("task ledger was not retained: %#v err=%v", task, err)
+	}
+}
+
 func TestRecallSearchIsProjectScopedRatherThanCurrentSessionScoped(t *testing.T) {
 	root := t.TempDir()
 	projectID := "prj-recall-scope-12345678"

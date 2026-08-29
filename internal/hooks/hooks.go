@@ -207,6 +207,7 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 		state.Task.Status = contracts.TaskInProgress
 	}
 	applyEvidence(&state, request)
+	r.syncTaskStateFromLedger(ctx, &state, request)
 	if r.repositoryRoot != "" && (request.Event == contracts.EventSessionStarted || request.Event == contracts.EventFileChanged || request.Event == contracts.EventToolFinished || request.Event == contracts.EventTestFinished || request.Event == contracts.EventCheckpointUpdated) {
 		if repository, repositoryErr := continuity.InspectRepository(ctx, r.repositoryRoot); repositoryErr == nil {
 			state.Repository = repository
@@ -311,6 +312,32 @@ func (r *Runtime) resumeDecision(ctx context.Context, request Request, state con
 		RequestedTask:             resumeTaskScope(request.Payload),
 		HistoricalRecallRequested: payloadBool(request.Payload, "historical_recall", "remote_recall", "historical_request"),
 	}), tasks
+}
+
+func (r *Runtime) syncTaskStateFromLedger(ctx context.Context, state *continuity.WorkState, request Request) {
+	if r == nil || r.store == nil || state == nil {
+		return
+	}
+	taskID := payloadField(request.Payload, "task_id")
+	if contracts.IsTaskEvent(request.Event) || (taskID != "" && taskID == state.ActiveTaskID) {
+		if taskID == "" {
+			taskID = state.ActiveTaskID
+		}
+		if task, err := r.store.GetTask(ctx, request.ProjectID, taskID); err == nil {
+			state.ActiveTaskID = task.TaskID
+			state.Task.TaskID = task.TaskID
+			state.Task.Goal = task.Goal
+			state.Task.Status = task.Status
+			state.Task.CurrentStep = task.CurrentStep
+			state.Task.NextAction = task.NextAction
+			state.Task.CompletionVerified = task.CompletionVerified
+			state.Task.CompletionPolicy = task.CompletionPolicy
+			state.Task.LatestVerificationEventID = task.LatestVerificationEventID
+			state.Task.LatestVerificationKind = task.LatestVerificationKind
+			state.Task.LatestVerificationScope = task.LatestVerificationScope
+			state.Task.LatestErrorRef = task.LatestErrorRef
+		}
+	}
 }
 
 func (r *Runtime) cachedRemoteContext(ctx context.Context, sessionID, fingerprint, queryHash string) (continuity.ContextPacket, error) {
@@ -728,12 +755,12 @@ func applyEvidence(state *continuity.WorkState, request Request) {
 	summary, _ := payload["summary"].(string)
 	status, _ := payload["status"].(string)
 	completionVerified, _ := payload["completion_verified"].(bool)
-	if completionVerified {
+	if completionVerified && !contracts.IsTaskEvent(request.Event) {
 		state.Task.CompletionVerified = true
 	}
 	if taskStatus, ok := payload["task_status"].(string); ok {
 		switch contracts.TaskStatus(taskStatus) {
-		case contracts.TaskPlanned, contracts.TaskInProgress, contracts.TaskBlocked, contracts.TaskFailed:
+		case contracts.TaskPlanned, contracts.TaskInProgress, contracts.TaskBlocked, contracts.TaskFailed, contracts.TaskInterrupted:
 			state.Task.Status = contracts.TaskStatus(taskStatus)
 		case contracts.TaskCompleted:
 			if state.Task.CompletionVerified {

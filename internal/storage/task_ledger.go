@@ -416,7 +416,11 @@ func projectTaskEvent(ctx context.Context, tx *sql.Tx, event Event, payload pars
 		if payload.HasStatus && payload.Status == contracts.TaskCompleted {
 			return errors.New("task_updated cannot promote a task to completed")
 		}
+		previousGitHead, previousDiffHash := task.GitHead, task.DiffHash
 		applyTaskFields(&task, payload, event)
+		if (payload.HasGitHead && previousGitHead != task.GitHead) || (payload.HasDiffHash && previousDiffHash != task.DiffHash) {
+			task.CompletionVerified = false
+		}
 		return writeTaskAndScope(ctx, tx, task, payload, now)
 
 	case contracts.EventTaskFailed, contracts.EventTaskBlocked, contracts.EventTaskInterrupted:

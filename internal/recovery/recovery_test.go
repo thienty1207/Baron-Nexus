@@ -56,3 +56,28 @@ func TestHistoricalMemoryIsEscapedAndCannotBecomeMarkupInstruction(t *testing.T)
 		t.Fatalf("trust boundary note missing: %s", rendered)
 	}
 }
+
+func TestRecoveryPacketCarriesStructuredTaskVerification(t *testing.T) {
+	state := continuity.WorkState{
+		ProjectID: "prj-task-recovery-12345678",
+		Task: continuity.TaskState{
+			TaskID:                    "task-a",
+			Goal:                      "finish adapter migration",
+			Status:                    contracts.TaskInProgress,
+			CompletionPolicy:          contracts.CompletionPolicyCompletion,
+			LatestVerificationEventID: "evt-unit-a",
+			LatestVerificationKind:    contracts.VerificationUnit,
+			LatestVerificationScope:   "internal/hooks",
+		},
+	}
+	packet := Build(state, state.Repository, nil)
+	if packet.TaskID != "task-a" || packet.CompletionPolicy != contracts.CompletionPolicyCompletion || packet.LatestVerificationKind != contracts.VerificationUnit || packet.LatestVerificationScope != "internal/hooks" {
+		t.Fatalf("structured task evidence was lost: %#v", packet)
+	}
+	rendered := packet.Render()
+	for _, want := range []string{"Task ID: task-a", "Completion policy: completion", "Latest verification: unit", "internal/hooks"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("recovery packet omitted %q: %s", want, rendered)
+		}
+	}
+}

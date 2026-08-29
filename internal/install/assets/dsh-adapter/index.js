@@ -4,6 +4,16 @@ import { randomUUID } from "node:crypto";
 export const name = "baron-dsh-adapter";
 export const version = "0.1.0";
 
+export const TASK_EVENTS = Object.freeze([
+  "task_started",
+  "task_updated",
+  "task_failed",
+  "task_blocked",
+  "task_verified",
+  "task_completed",
+  "task_interrupted",
+]);
+
 export function apply(ctx) {
   const adapter = createBaronAdapter();
   ctx.on("agent/session-start", (payload) => adapter.onSessionStart(payload));
@@ -73,6 +83,13 @@ export function createBaronAdapter(options = {}) {
       return response;
     },
     onFlush: (payload) => emit("session_clean_closed", lifecyclePayload("session_clean_closed", payload)),
+    onTaskStarted: (payload) => emit("task_started", lifecyclePayload("task_started", payload)),
+    onTaskUpdated: (payload) => emit("task_updated", lifecyclePayload("task_updated", payload)),
+    onTaskFailed: (payload) => emit("task_failed", lifecyclePayload("task_failed", payload)),
+    onTaskBlocked: (payload) => emit("task_blocked", lifecyclePayload("task_blocked", payload)),
+    onTaskVerified: (payload) => emit("task_verified", lifecyclePayload("task_verified", payload)),
+    onTaskCompleted: (payload) => emit("task_completed", lifecyclePayload("task_completed", payload)),
+    onTaskInterrupted: (payload) => emit("task_interrupted", lifecyclePayload("task_interrupted", payload)),
   };
 }
 
@@ -129,9 +146,18 @@ function lifecyclePayload(event, payload) {
   const header = isRecord(session.header) ? session.header : {};
   const cwd = firstString(header.cwd, root.cwd);
   if (cwd !== "") result.cwd = cwd;
-  for (const key of ["source", "turn", "step", "goal", "current_step", "next_action", "task_status", "completion_verified", "status", "command", "file", "symbol", "test", "exit_code", "class"]) {
-    const value = root[key];
+  const task = isRecord(root.task) ? root.task : {};
+  const taskID = firstString(root.task_id, root.taskId, task.task_id, task.id);
+  const activeTaskID = firstString(root.active_task_id, root.activeTaskId);
+  if (taskID !== "") result.task_id = taskID;
+  if (activeTaskID !== "") result.active_task_id = activeTaskID;
+  for (const key of ["source", "turn", "step", "goal", "current_step", "next_action", "task_status", "completion_verified", "completion_policy", "status", "command", "file", "symbol", "test", "exit_code", "class", "verification_ref", "verification_kind", "verification_scope", "latest_error_ref", "module_path"]) {
+    const value = root[key] !== undefined ? root[key] : task[key];
     if (isSafeScalar(value)) result[key] = value;
+  }
+  for (const key of ["changed_files", "module_paths", "dependencies"]) {
+    const value = root[key] !== undefined ? root[key] : task[key];
+    if (Array.isArray(value)) result[key] = value.filter((item) => typeof item === "string").map((item) => item.slice(0, 2048)).slice(0, 100);
   }
   const messages = textFromMessages(root.messages);
   if (messages !== "") result.prompt = messages;
