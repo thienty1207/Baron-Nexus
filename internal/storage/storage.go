@@ -680,6 +680,65 @@ func (s *Store) PutWorkState(ctx context.Context, projectID string, state []byte
 	return nil
 }
 
+// UpdateWorkState performs an atomic read/merge/write transaction. The
+// callback runs while SQLite holds an immediate write reservation, so
+// separate Baron hook processes cannot overwrite one another's local state.
+func (s *Store) UpdateWorkState(ctx context.Context, projectID string, update func([]byte) ([]byte, error)) error {
+	if s == nil || s.db == nil {
+		return errors.New("work state storage is not initialized")
+	}
+	if strings.TrimSpace(projectID) == "" {
+		return errors.New("work state project ID is required")
+	}
+	if update == nil {
+		return errors.New("work state update callback is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open work state connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return fmt.Errorf("begin work state transaction: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), "ROLLBACK")
+		}
+	}()
+
+	var existing []byte
+	err = conn.QueryRowContext(ctx, `SELECT state_json FROM work_state WHERE project_id=?`, projectID).Scan(&existing)
+	if errors.Is(err, sql.ErrNoRows) {
+		existing = nil
+	} else if err != nil {
+		return fmt.Errorf("read work state in transaction: %w", err)
+	}
+	next, err := update(existing)
+	if err != nil {
+		return fmt.Errorf("prepare work state update: %w", err)
+	}
+	if !json.Valid(next) {
+		return errors.New("work state update must produce valid JSON")
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO work_state(project_id, state_json, updated_at) VALUES (?, ?, ?)
+		ON CONFLICT(project_id) DO UPDATE SET state_json=excluded.state_json, updated_at=excluded.updated_at`,
+		projectID, next, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("write work state in transaction: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
+		return fmt.Errorf("commit work state transaction: %w", err)
+	}
+	committed = true
+	return nil
+}
+
 func (s *Store) GetWorkState(ctx context.Context, projectID string) ([]byte, error) {
 	var state []byte
 	if err := s.db.QueryRowContext(ctx, `SELECT state_json FROM work_state WHERE project_id=?`, projectID).Scan(&state); err != nil {

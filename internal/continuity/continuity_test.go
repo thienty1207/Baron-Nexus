@@ -1,8 +1,10 @@
 package continuity
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -190,6 +192,97 @@ func TestConcurrentEnginesLeaveAValidCheckpoint(t *testing.T) {
 	}
 	if state.ProjectID != projectID || state.Task.Goal != "goal" {
 		t.Fatalf("checkpoint was not a valid latest state: %#v", state)
+	}
+}
+
+func TestSaveLocalPersistsSQLiteWithoutCheckpointLock(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-local-save-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "local save"}); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := filepath.Join(root, "checkpoint.json")
+	engine := NewEngine(store, projectID, "local save", checkpoint)
+	if err := engine.Save(context.Background(), WorkState{ProjectID: projectID, Task: TaskState{Goal: "initial checkpoint"}}); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(root, "runtime", "locks", "checkpoint.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, []byte("active process\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.SaveLocal(context.Background(), WorkState{ProjectID: projectID, Task: TaskState{CurrentStep: "hot local state"}}); err != nil {
+		t.Fatal(err)
+	}
+	state, err := engine.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Task.CurrentStep != "hot local state" {
+		t.Fatalf("local SQLite state was not updated: %#v", state.Task)
+	}
+	checkpointData, err := os.ReadFile(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(checkpointData, []byte("hot local state")) {
+		t.Fatal("SaveLocal unexpectedly materialized the checkpoint")
+	}
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("SaveLocal changed the checkpoint lock: %v", err)
+	}
+}
+
+func TestConcurrentSaveLocalWritersKeepSQLiteStateValid(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-local-save-concurrent-12345678"
+	databasePath := filepath.Join(root, "state.db")
+	first, err := storage.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	if err := first.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "local save concurrent"}); err != nil {
+		t.Fatal(err)
+	}
+	stores := []*storage.Store{first}
+	for index := 0; index < 3; index++ {
+		store, openErr := storage.Open(databasePath)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		stores = append(stores, store)
+		defer store.Close()
+	}
+	engines := make([]*Engine, 0, len(stores))
+	for _, store := range stores {
+		engines = append(engines, NewEngine(store, projectID, "local save concurrent", filepath.Join(root, "checkpoint.json")))
+	}
+	var group sync.WaitGroup
+	for index := 0; index < 80; index++ {
+		group.Add(1)
+		go func(index int) {
+			defer group.Done()
+			state := WorkState{ProjectID: projectID, Task: TaskState{Goal: "concurrent local goal", CurrentStep: fmt.Sprintf("step-%d", index)}}
+			if saveErr := engines[index%len(engines)].SaveLocal(context.Background(), state); saveErr != nil {
+				t.Errorf("concurrent local save %d: %v", index, saveErr)
+			}
+		}(index)
+	}
+	group.Wait()
+	state, err := engines[0].Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Task.Goal != "concurrent local goal" || state.Task.CurrentStep == "" {
+		t.Fatalf("concurrent local saves lost canonical state: %#v", state.Task)
 	}
 }
 

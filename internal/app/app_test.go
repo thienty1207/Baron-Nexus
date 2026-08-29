@@ -483,6 +483,29 @@ func TestApplicationSetupAndHookRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDecodeHookRequestPreservesRawCodexPayload(t *testing.T) {
+	raw := []byte(`{"session_id":"ses-raw","idempotency_key":"raw-event","tool_name":"Bash","tool_response":"output"}`)
+	request, err := decodeHookRequest(raw, "codex", "PostToolUse", "prj-hook-12345678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(request.Payload, raw) {
+		t.Fatalf("raw Codex payload changed during request decoding: %s", request.Payload)
+	}
+	if request.Client != contracts.ClientCodex || request.Event != contracts.EventToolFinished || request.ProjectID != "prj-hook-12345678" {
+		t.Fatalf("hook request metadata was not canonicalized: %#v", request)
+	}
+
+	wrapped := []byte(`{"session_id":"ses-wrapped","payload":{"command":"go test ./..."}}`)
+	request, err = decodeHookRequest(wrapped, "dsh", "tool_finished", "prj-hook-12345678")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(request.Payload) != `{"command":"go test ./..."}` {
+		t.Fatalf("wrapped payload was not preserved: %s", request.Payload)
+	}
+}
+
 func TestStatusOutputUsesLocalRepositoryAndTaskLedger(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)

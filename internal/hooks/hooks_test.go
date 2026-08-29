@@ -459,6 +459,74 @@ func TestPromptsMinorToolsAndLongOutputsStayLocal(t *testing.T) {
 	}
 }
 
+func TestHotToolHooksDoNotFlushRemoteQueue(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-hot-tool-queue-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "hot tool queue"}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(store, continuity.NewEngine(store, projectID, "hot tool queue", filepath.Join(root, "checkpoint.json")), projectID)
+	runtime.SetMemoryBackend(&recordingHookBackend{}, contracts.IsolationContext{ProjectID: projectID, TeamID: "team", AgentID: "agent", UserID: "user"})
+	runtime.SetQueueOperationHandler(func(_ context.Context, _ storage.QueueItem) (string, error) {
+		return "delivered-by-hot-tool-test", nil
+	})
+	if _, err := runtime.syncer.QueueOperation(context.Background(), storage.QueueOperationCoreUpdate, "queued-before-tool", map[string]any{"summary": "defer this remote work"}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := runtime.Handle(context.Background(), Request{
+		Client: contracts.ClientCodex, Event: contracts.EventToolFinished, ProjectID: projectID,
+		SessionID: "hot-tool-session", IdempotencyKey: "hot-tool-event",
+		Payload: json.RawMessage(`{"command":"go test ./...","exit_code":0}`),
+	})
+	if err != nil || !response.OK {
+		t.Fatalf("hot tool hook failed: %#v %v", response, err)
+	}
+	pending, err := store.QueueCount(context.Background(), projectID, "pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != 1 {
+		t.Fatalf("hot tool hook drained %d queued remote operations, want 1 pending", 1-pending)
+	}
+}
+
+func TestHotToolHooksDoNotWaitForCheckpointLock(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-hot-tool-lock-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "hot tool lock"}); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := filepath.Join(root, "checkpoint.json")
+	lockPath := filepath.Join(root, "runtime", "locks", "checkpoint.lock")
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, []byte("active process\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(store, continuity.NewEngine(store, projectID, "hot tool lock", checkpoint), projectID)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	response, err := runtime.Handle(ctx, Request{
+		Client: contracts.ClientCodex, Event: contracts.EventToolFinished, ProjectID: projectID,
+		SessionID: "hot-lock-session", IdempotencyKey: "hot-lock-event",
+		Payload: json.RawMessage(`{"command":"go test ./...","exit_code":0}`),
+	})
+	if err != nil || !response.OK {
+		t.Fatalf("hot tool hook waited for checkpoint lock: %#v %v", response, err)
+	}
+}
+
 func TestMeaningfulTaskFailureQueuesBoundedStructuredSummary(t *testing.T) {
 	root := t.TempDir()
 	projectID := "prj-meaningful-summary-12345678"

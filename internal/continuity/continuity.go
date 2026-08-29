@@ -86,6 +86,18 @@ func NewEngine(store *storage.Store, projectID, projectName, checkpointPath stri
 }
 
 func (e *Engine) Save(ctx context.Context, state WorkState) error {
+	return e.save(ctx, state, true)
+}
+
+// SaveLocal persists canonical SQLite state without materializing the
+// human-readable checkpoint. High-frequency tool hooks use this path to avoid
+// contending on the cross-process checkpoint file lock; session boundaries
+// still call Save so the checkpoint is refreshed.
+func (e *Engine) SaveLocal(ctx context.Context, state WorkState) error {
+	return e.save(ctx, state, false)
+}
+
+func (e *Engine) save(ctx context.Context, state WorkState, materializeCheckpoint bool) error {
 	if e == nil || e.store == nil {
 		return errors.New("continuity engine has no storage")
 	}
@@ -98,34 +110,44 @@ func (e *Engine) Save(ctx context.Context, state WorkState) error {
 	if state.ProjectName == "" {
 		state.ProjectName = e.projectName
 	}
-	return e.withCheckpointLock(ctx, func() error {
-		if existingData, existingErr := e.store.GetWorkState(ctx, state.ProjectID); existingErr == nil {
-			var existing WorkState
-			if json.Unmarshal(existingData, &existing) == nil {
-				state = mergeWorkState(existing, state)
+	persist := func() error {
+		var data []byte
+		err := e.store.UpdateWorkState(ctx, state.ProjectID, func(existingData []byte) ([]byte, error) {
+			if len(existingData) > 0 {
+				var existing WorkState
+				if json.Unmarshal(existingData, &existing) == nil {
+					state = mergeWorkState(existing, state)
+				}
 			}
-		} else if !errors.Is(existingErr, sql.ErrNoRows) {
-			return existingErr
-		}
-		if state.UpdatedAt.IsZero() {
-			state.UpdatedAt = e.clock().UTC()
-		} else {
-			state.UpdatedAt = state.UpdatedAt.UTC()
-		}
-		data, err := json.MarshalIndent(state, "", "  ")
+			if state.UpdatedAt.IsZero() {
+				state.UpdatedAt = e.clock().UTC()
+			} else {
+				state.UpdatedAt = state.UpdatedAt.UTC()
+			}
+			encoded, marshalErr := json.MarshalIndent(state, "", "  ")
+			if marshalErr != nil {
+				return nil, fmt.Errorf("encode work state: %w", marshalErr)
+			}
+			data = encoded
+			return encoded, nil
+		})
 		if err != nil {
-			return fmt.Errorf("encode work state: %w", err)
+			return err
+		}
+		if !materializeCheckpoint {
+			return nil
 		}
 		// SQLite is authoritative. The readable checkpoint is a materialized
 		// view and is written under the same short-lived process lock.
-		if err := e.store.PutWorkState(ctx, state.ProjectID, data); err != nil {
-			return err
-		}
 		if err := config.AtomicWriteFile(e.checkpointPath, append(data, '\n'), 0o600); err != nil {
 			return fmt.Errorf("materialize checkpoint: %w", err)
 		}
 		return nil
-	})
+	}
+	if materializeCheckpoint {
+		return e.withCheckpointLock(ctx, persist)
+	}
+	return persist()
 }
 
 func mergeWorkState(existing, next WorkState) WorkState {

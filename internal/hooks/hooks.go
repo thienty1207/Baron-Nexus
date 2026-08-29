@@ -148,7 +148,6 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 	if !json.Valid(request.Payload) {
 		return response, fmt.Errorf("hook payload must be valid JSON")
 	}
-	request.Payload = json.RawMessage(config.Redact(string(request.Payload), r.secrets))
 	if request.SessionID == "" {
 		request.SessionID = payloadField(request.Payload, "session_id", "sessionId", "session")
 	}
@@ -161,7 +160,9 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 	if normalized, normalizeErr := normalizeLifecyclePayload(request.Payload, request.Event); normalizeErr != nil {
 		return response, normalizeErr
 	} else {
-		request.Payload = normalized
+		// Compact before redaction so credential scanning never repeatedly walks
+		// an unbounded tool transcript that will not be persisted.
+		request.Payload = json.RawMessage(config.Redact(string(normalized), r.secrets))
 	}
 	if request.SessionID == "" {
 		request.SessionID = storage.NewID("ses")
@@ -233,8 +234,14 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 			state.Repository = repository
 		}
 	}
-	if err := r.engine.Save(ctx, state); err != nil {
-		return response, err
+	var saveErr error
+	if shouldMaterializeCheckpoint(request.Event) {
+		saveErr = r.engine.Save(ctx, state)
+	} else {
+		saveErr = r.engine.SaveLocal(ctx, state)
+	}
+	if saveErr != nil {
+		return response, saveErr
 	}
 	resumeDecision, ledgerTasks := r.resumeDecision(ctx, request, state, loadErr == nil)
 	response.OK = true
@@ -275,11 +282,12 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 	// the provider session.
 	r.captureMemory(ctx, request, state)
 	r.captureContinuitySummaries(ctx, request, state)
-	// Every lifecycle event is also a retry opportunity. This drains work left
-	// by a crashed provider or a previous hook invocation without requiring a
-	// separate manual repair command, while the bounded context keeps the
-	// provider session fail-open when Tencent is slow or unavailable.
-	r.flushRemoteQueue(ctx)
+	// Only lifecycle boundaries drain previously queued remote work. Tool hooks
+	// are the hot path and must not turn every local event into a remote retry
+	// attempt; meaningful task summaries flush their own newly queued records.
+	if shouldFlushRemoteQueue(request.Event) {
+		r.flushRemoteQueue(ctx)
+	}
 	if (r.backend != nil || r.knowledge != nil) && shouldRecall(request.Event) && resumeDecision.Outcome == continuity.ResumeRemoteRecoveryRequired {
 		requestIsolation := r.isolation
 		// Recall is project-scoped by design. The current session is the
@@ -454,6 +462,28 @@ func (r *Runtime) flushRemoteQueue(ctx context.Context) {
 	flushCtx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
 	defer cancel()
 	_, _ = r.syncer.Flush(flushCtx, 20)
+}
+
+func shouldFlushRemoteQueue(event contracts.EventType) bool {
+	switch event {
+	case contracts.EventSessionStarted, contracts.EventAssistantFinal,
+		contracts.EventSessionCleanClose, contracts.EventSessionInterrupted,
+		contracts.EventHandoffStarted, contracts.EventHandoffCompleted:
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldMaterializeCheckpoint(event contracts.EventType) bool {
+	switch event {
+	case contracts.EventToolStarted, contracts.EventToolFinished,
+		contracts.EventFileChanged, contracts.EventTestStarted,
+		contracts.EventCheckpointUpdated:
+		return false
+	default:
+		return true
+	}
 }
 
 func (r *Runtime) captureMemory(ctx context.Context, request Request, state continuity.WorkState) {

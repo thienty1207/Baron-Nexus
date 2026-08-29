@@ -1346,36 +1346,47 @@ func (a *App) HandleHook(ctx context.Context, clientName, eventName, root string
 	if err != nil {
 		return writeHookFailureForClient(output, clientName, eventName, err)
 	}
+	request, err := decodeHookRequest(data, clientName, eventName, resolved.ProjectID)
+	if err != nil {
+		return writeHookFailureForClient(output, clientName, eventName, err)
+	}
+	response, handleErr := runtime.Handle(ctx, request)
+	if handleErr != nil {
+		response.OK = false
+		response.Error = config.Redact(handleErr.Error(), hookSecrets)
+	}
+	hookOutput, err := json.Marshal(response)
+	if err != nil {
+		return writeHookFailureForClient(output, clientName, eventName, err)
+	}
+	if strings.EqualFold(clientName, "codex") {
+		return writeCodexHookOutput(output, eventName, hookOutput)
+	}
+	if output == nil {
+		return nil
+	}
+	_, err = output.Write(append(hookOutput, '\n'))
+	return err
+}
+
+func decodeHookRequest(data []byte, clientName, eventName, projectID string) (hooks.Request, error) {
 	request := hooks.Request{}
 	if len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(data, &request); err != nil {
-			return writeHookFailureForClient(output, clientName, eventName, err)
+			return hooks.Request{}, err
 		}
 		if len(bytes.TrimSpace(request.Payload)) == 0 {
 			// Upstream Codex/DSH payloads are not required to wrap their fields in
-			// Baron’s payload property; preserve the original bounded JSON as the
-			// evidence body instead of silently discarding it.
+			// Baron's payload property; preserve the original JSON as evidence.
 			request.Payload = json.RawMessage(data)
 		}
 	}
 	request.Client = contracts.HookClient(strings.ToLower(clientName))
 	request.Event = canonicalEvent(eventName)
 	if request.ProjectID == "" {
-		request.ProjectID = resolved.ProjectID
+		request.ProjectID = projectID
 	}
-	encoded, err := json.Marshal(request)
-	if err != nil {
-		return writeHookFailureForClient(output, clientName, eventName, err)
-	}
-	var hookOutput bytes.Buffer
-	if err := hooks.ServeJSON(ctx, runtime, bytes.NewReader(encoded), &hookOutput); err != nil {
-		return writeHookFailureForClient(output, clientName, eventName, err)
-	}
-	if strings.EqualFold(clientName, "codex") {
-		return writeCodexHookOutput(output, eventName, hookOutput.Bytes())
-	}
-	_, err = io.Copy(output, &hookOutput)
-	return err
+	return request, nil
 }
 
 func writeHookFailure(output io.Writer, err error) error {
