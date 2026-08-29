@@ -407,6 +407,110 @@ func TestLocalSufficientPromptSkipsRemoteRecall(t *testing.T) {
 	}
 }
 
+func TestPromptsMinorToolsAndLongOutputsStayLocal(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-local-remote-boundary-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "remote boundary"}); err != nil {
+		t.Fatal(err)
+	}
+	engine := continuity.NewEngine(store, projectID, "remote boundary", filepath.Join(root, "checkpoint.json"))
+	if err := engine.Save(context.Background(), continuity.WorkState{
+		ProjectID:  projectID,
+		Repository: continuity.RepositoryEvidence{GitHead: "head-local", DiffHash: "diff-local", Branch: "main"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	backend := &recordingHookBackend{}
+	runtime := NewRuntime(store, engine, projectID)
+	runtime.SetMemoryBackend(backend, contracts.IsolationContext{ProjectID: projectID, TeamID: "team", AgentID: "agent", UserID: "user"})
+	longOutput := strings.Repeat("raw tool output ", 4096)
+	toolPayload, err := json.Marshal(map[string]any{
+		"command": "go test ./...", "summary": "minor tool update", "tool_output": longOutput,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requests := []Request{
+		{Client: contracts.ClientCodex, Event: contracts.EventUserPrompt, ProjectID: projectID, SessionID: "local-session", IdempotencyKey: "local-prompt", Payload: json.RawMessage(`{"prompt":"continue local work"}`)},
+		{Client: contracts.ClientCodex, Event: contracts.EventToolFinished, ProjectID: projectID, SessionID: "local-session", IdempotencyKey: "local-tool", Payload: toolPayload},
+	}
+	for _, request := range requests {
+		if response, handleErr := runtime.Handle(context.Background(), request); handleErr != nil || !response.OK {
+			t.Fatalf("local event failed: %#v %v", response, handleErr)
+		}
+	}
+	if len(backend.captured) != 0 {
+		t.Fatalf("prompt/minor tool unexpectedly produced remote captures: %#v", backend.captured)
+	}
+	pending, err := store.QueueCount(context.Background(), projectID, "pending")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("prompt/minor tool unexpectedly queued remote work: %d", pending)
+	}
+	if count, err := store.CountEvents(context.Background(), projectID); err != nil || count != 2 {
+		t.Fatalf("local event evidence count=%d err=%v", count, err)
+	}
+}
+
+func TestMeaningfulTaskFailureQueuesBoundedStructuredSummary(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-meaningful-summary-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "meaningful summary"}); err != nil {
+		t.Fatal(err)
+	}
+	backend := &recordingHookBackend{}
+	runtime := NewRuntime(store, continuity.NewEngine(store, projectID, "meaningful summary", filepath.Join(root, "checkpoint.json")), projectID)
+	runtime.SetMemoryBackend(backend, contracts.IsolationContext{ProjectID: projectID, TeamID: "team", AgentID: "agent", UserID: "user"})
+	var operations []storage.QueueItem
+	runtime.SetQueueOperationHandler(func(_ context.Context, item storage.QueueItem) (string, error) {
+		operations = append(operations, item)
+		return item.Operation + "-request", nil
+	})
+	start := Request{
+		Client: contracts.ClientCodex, Event: contracts.EventTaskStarted, ProjectID: projectID, SessionID: "task-session", IdempotencyKey: "task-start",
+		Payload: json.RawMessage(`{"task_id":"task-failure","goal":"fix the failing pipeline","status":"in_progress","current_step":"run CI","next_action":"inspect the failing job","completion_policy":"completion"}`),
+	}
+	if response, handleErr := runtime.Handle(context.Background(), start); handleErr != nil || !response.OK {
+		t.Fatalf("task start failed: %#v %v", response, handleErr)
+	}
+	if len(operations) != 0 {
+		t.Fatalf("task start should not produce a remote summary: %#v", operations)
+	}
+	failure := Request{
+		Client: contracts.ClientCodex, Event: contracts.EventTaskFailed, ProjectID: projectID, SessionID: "task-session", IdempotencyKey: "task-failed",
+		Payload: json.RawMessage(`{"task_id":"task-failure","status":"failed","current_step":"run CI","next_action":"fix the failing job","latest_error_ref":"ci-error-1","summary":"CI failed after dependency resolution"}`),
+	}
+	if response, handleErr := runtime.Handle(context.Background(), failure); handleErr != nil || !response.OK {
+		t.Fatalf("task failure failed: %#v %v", response, handleErr)
+	}
+	var summaryPayload map[string]any
+	for _, item := range operations {
+		if item.Operation == storage.QueueOperationCoreUpdate {
+			if err := json.Unmarshal(item.Payload, &summaryPayload); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if summaryPayload["task_id"] != "task-failure" || summaryPayload["status"] != string(contracts.TaskFailed) || summaryPayload["latest_error_ref"] != "ci-error-1" {
+		t.Fatalf("structured failure summary missing task state: %#v", summaryPayload)
+	}
+	if len(operations) != 2 || !containsHookString([]string{operations[0].Operation, operations[1].Operation}, storage.QueueOperationCoreUpdate) || !containsHookString([]string{operations[0].Operation, operations[1].Operation}, storage.QueueOperationScenarioUpdate) {
+		t.Fatalf("unexpected meaningful summary operations: %#v", operations)
+	}
+}
+
 func TestRemoteRecallUsesLocalCacheForUnchangedFingerprint(t *testing.T) {
 	root := t.TempDir()
 	projectID := "prj-recall-cache-hook-12345678"
@@ -611,7 +715,7 @@ func TestSessionStartContextIncludesBoundedWikiAndCodeGraphCitations(t *testing.
 	}
 }
 
-func TestUserPromptRecallsAndQueuesRedactedMemoryAfterLocalPersistence(t *testing.T) {
+func TestUserPromptPersistsLocallyWithoutRemoteCapture(t *testing.T) {
 	root := t.TempDir()
 	projectID := "prj-hook-memory-12345678"
 	store, err := storage.Open(filepath.Join(root, "state.db"))
@@ -634,14 +738,18 @@ func TestUserPromptRecallsAndQueuesRedactedMemoryAfterLocalPersistence(t *testin
 	if err != nil || !response.OK {
 		t.Fatalf("prompt hook failed: %#v %v", response, err)
 	}
-	if len(backend.captured) != 1 || strings.Contains(backend.captured[0].Content, "sk-hook-secret") {
-		t.Fatalf("captured memory was not redacted or was not delivered: %#v", backend.captured)
-	}
-	if !strings.Contains(backend.captured[0].Content, "[REDACTED]") {
-		t.Fatalf("redaction marker missing: %#v", backend.captured[0])
+	if len(backend.captured) != 0 {
+		t.Fatalf("user prompt unexpectedly produced remote capture: %#v", backend.captured)
 	}
 	if _, err := store.GetWorkState(context.Background(), projectID); err != nil {
 		t.Fatalf("local state was not persisted before memory delivery: %v", err)
+	}
+	entries, err := store.ListTimeline(context.Background(), projectID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || strings.Contains(entries[0].Summary, "sk-hook-secret") {
+		t.Fatalf("unsafe local prompt evidence missing or exposed: %#v", entries)
 	}
 }
 
@@ -666,7 +774,7 @@ func TestAssistantFinalQueuesCoreAndScenarioContinuitySummaries(t *testing.T) {
 	})
 	response, err := runtime.Handle(context.Background(), Request{
 		Client: contracts.ClientCodex, Event: contracts.EventAssistantFinal, ProjectID: projectID, SessionID: "summary-session", IdempotencyKey: "summary-final",
-		Payload: json.RawMessage(`{"summary":"refresh token flow implemented", "next_action":"run integration tests", "symbol":"RefreshToken"}`),
+		Payload: json.RawMessage(`{"summary":"refresh token flow implemented", "next_action":"run integration tests", "symbol":"RefreshToken", "explicit_handoff":true}`),
 	})
 	if err != nil || !response.OK {
 		t.Fatalf("assistant final hook failed: %#v %v", response, err)

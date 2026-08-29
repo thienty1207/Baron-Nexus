@@ -437,7 +437,7 @@ func (r *Runtime) flushRemoteQueue(ctx context.Context) {
 }
 
 func (r *Runtime) captureMemory(ctx context.Context, request Request, state continuity.WorkState) {
-	if r == nil || r.syncer == nil || !shouldCapture(request.Event) {
+	if r == nil || r.syncer == nil || !shouldCaptureRemote(request, state) {
 		return
 	}
 	record, ok := memoryRecord(request, state)
@@ -454,7 +454,7 @@ func (r *Runtime) captureMemory(ctx context.Context, request Request, state cont
 }
 
 func (r *Runtime) captureContinuitySummaries(ctx context.Context, request Request, state continuity.WorkState) {
-	if r == nil || r.syncer == nil || r.operationHandler == nil || !shouldSyncSummary(request.Event) {
+	if r == nil || r.syncer == nil || r.operationHandler == nil || !shouldSyncSummary(request, state) {
 		return
 	}
 	record, ok := memoryRecord(request, state)
@@ -463,10 +463,16 @@ func (r *Runtime) captureContinuitySummaries(ctx context.Context, request Reques
 	}
 	payload := map[string]any{
 		"session_id": request.SessionID, "client": request.Client, "event_type": request.Event,
-		"summary": record.Content, "goal": state.Task.Goal, "status": state.Task.Status,
-		"current_step": state.Task.CurrentStep, "next_action": state.Task.NextAction,
-		"completion_verified": state.Task.CompletionVerified, "evidence_refs": record.EvidenceRefs,
-		"changed_files": state.Repository.ChangedFiles, "latest_test": state.LatestTest,
+		"summary": record.Content, "task_id": firstNonEmptyTaskID(state, request), "active_task_id": state.ActiveTaskID,
+		"goal": boundedText(state.Task.Goal, 2048), "status": state.Task.Status,
+		"current_step": boundedText(state.Task.CurrentStep, 1024), "next_action": boundedText(state.Task.NextAction, 1024),
+		"completion_verified": state.Task.CompletionVerified, "completion_policy": state.Task.CompletionPolicy,
+		"latest_verification_event_id": state.Task.LatestVerificationEventID,
+		"latest_verification_kind":     state.Task.LatestVerificationKind, "latest_verification_scope": boundedText(state.Task.LatestVerificationScope, 512),
+		"latest_error_ref": boundedText(state.Task.LatestErrorRef, 512), "evidence_refs": boundedValues(record.EvidenceRefs, 20, 512),
+		"git_branch": boundedText(state.Repository.Branch, 256), "git_head": boundedText(state.Repository.GitHead, 128),
+		"diff_hash": boundedText(state.Repository.DiffHash, 128), "changed_files": boundedValues(state.Repository.ChangedFiles, 20, 512),
+		"latest_test": remoteTestEvidence(state.LatestTest),
 	}
 	keyBase := "summary-" + request.ProjectID + "-" + request.SessionID + "-" + record.ContentHash
 	_, _ = r.syncer.QueueOperation(ctx, storage.QueueOperationCoreUpdate, keyBase+":core", payload)
@@ -476,24 +482,82 @@ func (r *Runtime) captureContinuitySummaries(ctx context.Context, request Reques
 	cancel()
 }
 
-func shouldSyncSummary(event contracts.EventType) bool {
-	switch event {
-	case contracts.EventAssistantFinal, contracts.EventCheckpointUpdated, contracts.EventSessionCleanClose, contracts.EventSessionInterrupted:
+func shouldSyncSummary(request Request, state continuity.WorkState) bool {
+	switch request.Event {
+	case contracts.EventTaskFailed, contracts.EventTaskBlocked,
+		contracts.EventSessionCleanClose, contracts.EventSessionInterrupted,
+		contracts.EventHandoffStarted, contracts.EventHandoffCompleted, contracts.EventErrorObserved:
 		return true
+	case contracts.EventAssistantFinal:
+		return payloadBool(request.Payload, "handoff", "explicit_handoff", "handoff_requested")
+	case contracts.EventTaskVerified:
+		return state.Task.CompletionVerified
+	case contracts.EventTaskCompleted:
+		return state.Task.Status == contracts.TaskCompleted && state.Task.CompletionVerified
+	case contracts.EventTestFinished:
+		return importantTestEvidence(request.Payload)
+	case contracts.EventCheckpointUpdated:
+		return payloadBool(request.Payload, "handoff", "explicit_handoff", "handoff_requested")
 	default:
 		return false
 	}
 }
 
-func shouldCapture(event contracts.EventType) bool {
-	switch event {
-	case contracts.EventUserPrompt, contracts.EventAssistantFinal, contracts.EventDecisionRecorded,
-		contracts.EventToolFinished, contracts.EventTestFinished, contracts.EventErrorObserved,
-		contracts.EventCheckpointUpdated, contracts.EventSessionCleanClose, contracts.EventSessionInterrupted:
-		return true
-	default:
+func shouldCaptureRemote(request Request, state continuity.WorkState) bool {
+	return shouldSyncSummary(request, state)
+}
+
+func importantTestEvidence(raw json.RawMessage) bool {
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil {
 		return false
 	}
+	if payloadBool(raw, "important", "verification", "acceptance", "build") {
+		return true
+	}
+	if exitCode, ok := payload["exit_code"].(float64); ok && int(exitCode) != 0 {
+		return true
+	}
+	if kind, ok := payload["verification_kind"].(string); ok && contracts.VerificationKind(kind).Valid() {
+		return true
+	}
+	command, _ := payload["command"].(string)
+	if command == "" {
+		if toolInput, ok := payload["tool_input"].(map[string]any); ok {
+			command, _ = toolInput["command"].(string)
+		}
+	}
+	return strings.Contains(strings.ToLower(command), "build")
+}
+
+func firstNonEmptyTaskID(state continuity.WorkState, request Request) string {
+	if state.Task.TaskID != "" {
+		return boundedText(state.Task.TaskID, 256)
+	}
+	if state.ActiveTaskID != "" {
+		return boundedText(state.ActiveTaskID, 256)
+	}
+	return payloadField(request.Payload, "task_id")
+}
+
+func remoteTestEvidence(test continuity.TestEvidence) map[string]any {
+	result := map[string]any{}
+	if test.Command != "" {
+		result["command"] = boundedText(test.Command, 512)
+	}
+	if test.Status != "" {
+		result["status"] = boundedText(test.Status, 64)
+	}
+	if test.Summary != "" {
+		result["summary"] = boundedText(test.Summary, 1024)
+	}
+	if test.ExitCode != nil {
+		result["exit_code"] = *test.ExitCode
+	}
+	if test.ObservedAt != "" {
+		result["observed_at"] = boundedText(test.ObservedAt, 64)
+	}
+	return result
 }
 
 func shouldRecall(event contracts.EventType) bool {
@@ -672,7 +736,12 @@ func memoryRecord(request Request, state continuity.WorkState) (contracts.Memory
 			content = strings.TrimSpace(command + "\n" + summary)
 		}
 	}
-	if strings.TrimSpace(content) == "" && (request.Event == contracts.EventSessionCleanClose || request.Event == contracts.EventSessionInterrupted || request.Event == contracts.EventCheckpointUpdated) {
+	if strings.TrimSpace(content) == "" && contracts.IsTaskEvent(request.Event) {
+		content = fmt.Sprintf("task transition: task_id=%s; status=%s; goal=%s; current_step=%s; next_action=%s; verification=%s/%s; completion_verified=%t; error_ref=%s",
+			firstNonEmptyTaskID(state, request), state.Task.Status, state.Task.Goal, state.Task.CurrentStep, state.Task.NextAction,
+			state.Task.LatestVerificationKind, state.Task.LatestVerificationScope, state.Task.CompletionVerified, state.Task.LatestErrorRef)
+	}
+	if strings.TrimSpace(content) == "" && (request.Event == contracts.EventSessionCleanClose || request.Event == contracts.EventSessionInterrupted || request.Event == contracts.EventCheckpointUpdated || request.Event == contracts.EventHandoffStarted || request.Event == contracts.EventHandoffCompleted) {
 		content = fmt.Sprintf("continuity checkpoint: goal=%s; status=%s; current_step=%s; next_action=%s; last_test=%s (%s)",
 			state.Task.Goal, state.Task.Status, state.Task.CurrentStep, state.Task.NextAction, state.LatestTest.Command, state.LatestTest.Status)
 	}
@@ -680,6 +749,9 @@ func memoryRecord(request Request, state continuity.WorkState) (contracts.Memory
 		return contracts.MemoryRecord{}, false
 	}
 	metadata := map[string]string{"event_type": string(request.Event), "task_status": string(state.Task.Status)}
+	if taskID := firstNonEmptyTaskID(state, request); taskID != "" {
+		metadata["task_id"] = taskID
+	}
 	if state.Repository.Branch != "" {
 		metadata["git_branch"] = boundedText(state.Repository.Branch, 256)
 	}
@@ -706,7 +778,7 @@ func memoryRecord(request Request, state continuity.WorkState) (contracts.Memory
 	}
 	record := contracts.MemoryRecord{
 		ProjectID: request.ProjectID, SourceClient: request.Client, SessionID: request.SessionID,
-		Kind: string(request.Event), Content: boundedText(content, 32*1024), Metadata: metadata, EvidenceRefs: evidenceRefs,
+		Kind: string(request.Event), Content: boundedText(content, 4096), Metadata: metadata, EvidenceRefs: evidenceRefs,
 	}
 	record.Normalize()
 	return record, true
