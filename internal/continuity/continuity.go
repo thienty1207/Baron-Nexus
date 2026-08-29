@@ -20,12 +20,18 @@ import (
 )
 
 type TaskState struct {
-	Goal               string               `json:"goal"`
-	Status             contracts.TaskStatus `json:"status"`
-	LastSuccessfulStep string               `json:"last_successful_step"`
-	CurrentStep        string               `json:"current_step"`
-	NextAction         string               `json:"next_action"`
-	CompletionVerified bool                 `json:"completion_verified"`
+	TaskID                    string                     `json:"task_id"`
+	Goal                      string                     `json:"goal"`
+	Status                    contracts.TaskStatus       `json:"status"`
+	LastSuccessfulStep        string                     `json:"last_successful_step"`
+	CurrentStep               string                     `json:"current_step"`
+	NextAction                string                     `json:"next_action"`
+	CompletionVerified        bool                       `json:"completion_verified"`
+	CompletionPolicy          contracts.CompletionPolicy `json:"completion_policy"`
+	LatestVerificationEventID string                     `json:"latest_verification_event_id,omitempty"`
+	LatestVerificationKind    contracts.VerificationKind `json:"latest_verification_kind,omitempty"`
+	LatestVerificationScope   string                     `json:"latest_verification_scope,omitempty"`
+	LatestErrorRef            string                     `json:"latest_error_ref,omitempty"`
 }
 
 type TestEvidence struct {
@@ -56,6 +62,7 @@ type WorkState struct {
 	SchemaVersion int                    `json:"schema_version"`
 	ProjectID     string                 `json:"project_id"`
 	ProjectName   string                 `json:"project_name"`
+	ActiveTaskID  string                 `json:"active_task_id,omitempty"`
 	Task          TaskState              `json:"task"`
 	Repository    RepositoryEvidence     `json:"repository"`
 	LatestTest    TestEvidence           `json:"latest_test"`
@@ -132,6 +139,9 @@ func mergeWorkState(existing, next WorkState) WorkState {
 	if merged.Task.Goal == "" {
 		merged.Task.Goal = existing.Task.Goal
 	}
+	if merged.Task.TaskID == "" {
+		merged.Task.TaskID = existing.Task.TaskID
+	}
 	if merged.Task.LastSuccessfulStep == "" {
 		merged.Task.LastSuccessfulStep = existing.Task.LastSuccessfulStep
 	}
@@ -146,6 +156,21 @@ func mergeWorkState(existing, next WorkState) WorkState {
 	}
 	if existing.Task.CompletionVerified {
 		merged.Task.CompletionVerified = true
+	}
+	if merged.Task.CompletionPolicy == "" {
+		merged.Task.CompletionPolicy = existing.Task.CompletionPolicy
+	}
+	if merged.Task.LatestVerificationEventID == "" {
+		merged.Task.LatestVerificationEventID = existing.Task.LatestVerificationEventID
+	}
+	if merged.Task.LatestVerificationKind == "" {
+		merged.Task.LatestVerificationKind = existing.Task.LatestVerificationKind
+	}
+	if merged.Task.LatestVerificationScope == "" {
+		merged.Task.LatestVerificationScope = existing.Task.LatestVerificationScope
+	}
+	if merged.Task.LatestErrorRef == "" {
+		merged.Task.LatestErrorRef = existing.Task.LatestErrorRef
 	}
 	if merged.LatestTest.Command == "" && merged.LatestTest.Summary == "" {
 		merged.LatestTest = existing.LatestTest
@@ -169,6 +194,9 @@ func mergeWorkState(existing, next WorkState) WorkState {
 	}
 	if merged.SessionID == "" {
 		merged.SessionID = existing.SessionID
+	}
+	if merged.ActiveTaskID == "" {
+		merged.ActiveTaskID = existing.ActiveTaskID
 	}
 	return merged
 }

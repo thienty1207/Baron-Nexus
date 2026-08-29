@@ -44,6 +44,13 @@ const (
 	EventMemoryDelivered    EventType = "memory_delivered"
 	EventHandoffStarted     EventType = "handoff_started"
 	EventHandoffCompleted   EventType = "handoff_completed"
+	EventTaskStarted        EventType = "task_started"
+	EventTaskUpdated        EventType = "task_updated"
+	EventTaskFailed         EventType = "task_failed"
+	EventTaskBlocked        EventType = "task_blocked"
+	EventTaskVerified       EventType = "task_verified"
+	EventTaskCompleted      EventType = "task_completed"
+	EventTaskInterrupted    EventType = "task_interrupted"
 )
 
 // TaskStatus is independent from session lifecycle. A clean session end never
@@ -51,12 +58,69 @@ const (
 type TaskStatus string
 
 const (
-	TaskPlanned    TaskStatus = "planned"
-	TaskInProgress TaskStatus = "in_progress"
-	TaskBlocked    TaskStatus = "blocked"
-	TaskFailed     TaskStatus = "failed"
-	TaskCompleted  TaskStatus = "completed"
+	TaskPlanned     TaskStatus = "planned"
+	TaskInProgress  TaskStatus = "in_progress"
+	TaskBlocked     TaskStatus = "blocked"
+	TaskFailed      TaskStatus = "failed"
+	TaskCompleted   TaskStatus = "completed"
+	TaskInterrupted TaskStatus = "interrupted"
 )
+
+// VerificationKind describes the scope of a successful verification. A
+// successful lower-scope check is evidence, not task completion by itself.
+type VerificationKind string
+
+const (
+	VerificationUnit        VerificationKind = "unit"
+	VerificationIntegration VerificationKind = "integration"
+	VerificationBuild       VerificationKind = "build"
+	VerificationAcceptance  VerificationKind = "acceptance"
+	VerificationCompletion  VerificationKind = "completion"
+)
+
+func (k VerificationKind) Valid() bool {
+	switch k {
+	case VerificationUnit, VerificationIntegration, VerificationBuild,
+		VerificationAcceptance, VerificationCompletion:
+		return true
+	default:
+		return false
+	}
+}
+
+// CompletionPolicy controls which verification kind can promote a task to
+// completed. The default is the explicit completion verification kind.
+type CompletionPolicy string
+
+const (
+	CompletionPolicyCompletion CompletionPolicy = "completion"
+	CompletionPolicyAcceptance CompletionPolicy = "acceptance"
+)
+
+func (p CompletionPolicy) Valid() bool {
+	return p == CompletionPolicyCompletion || p == CompletionPolicyAcceptance
+}
+
+func (p CompletionPolicy) Allows(kind VerificationKind) bool {
+	switch p {
+	case CompletionPolicyAcceptance:
+		return kind == VerificationAcceptance || kind == VerificationCompletion
+	case CompletionPolicyCompletion:
+		return kind == VerificationCompletion
+	default:
+		return false
+	}
+}
+
+func IsTaskEvent(event EventType) bool {
+	switch event {
+	case EventTaskStarted, EventTaskUpdated, EventTaskFailed, EventTaskBlocked,
+		EventTaskVerified, EventTaskCompleted, EventTaskInterrupted:
+		return true
+	default:
+		return false
+	}
+}
 
 type SessionState string
 
@@ -263,7 +327,9 @@ func SortedEventTypes() []EventType {
 		EventTestStarted, EventTestFinished, EventErrorObserved,
 		EventDecisionRecorded, EventCheckpointUpdated, EventSessionCleanClose,
 		EventSessionInterrupted, EventMemoryQueued, EventMemoryDelivered,
-		EventHandoffStarted, EventHandoffCompleted,
+		EventHandoffStarted, EventHandoffCompleted, EventTaskStarted,
+		EventTaskUpdated, EventTaskFailed, EventTaskBlocked, EventTaskVerified,
+		EventTaskCompleted, EventTaskInterrupted,
 	}
 	sort.Slice(values, func(i, j int) bool { return values[i] < values[j] })
 	return values

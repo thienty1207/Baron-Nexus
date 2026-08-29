@@ -7,6 +7,31 @@ import (
 	"testing"
 )
 
+func TestCanonicalTaskContracts(t *testing.T) {
+	for _, event := range []EventType{
+		EventTaskStarted, EventTaskUpdated, EventTaskFailed, EventTaskBlocked,
+		EventTaskVerified, EventTaskCompleted, EventTaskInterrupted,
+	} {
+		if !IsTaskEvent(event) {
+			t.Fatalf("canonical task event %q was not recognized", event)
+		}
+	}
+	if TaskInterrupted == "" {
+		t.Fatal("interrupted task status is missing")
+	}
+	for _, kind := range []VerificationKind{
+		VerificationUnit, VerificationIntegration, VerificationBuild,
+		VerificationAcceptance, VerificationCompletion,
+	} {
+		if !kind.Valid() {
+			t.Fatalf("verification kind %q is not valid", kind)
+		}
+	}
+	if !CompletionPolicyCompletion.Valid() || !CompletionPolicyAcceptance.Valid() {
+		t.Fatal("completion policies are not valid")
+	}
+}
+
 func TestAcceptanceContractContainsEveryFrozenIDExactlyOnce(t *testing.T) {
 	path := filepath.Join("..", "..", "acceptance", "acceptance-contract.json")
 	data, err := os.ReadFile(path)

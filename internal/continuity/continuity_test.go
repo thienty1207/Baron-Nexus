@@ -54,6 +54,48 @@ func TestCheckpointTracksLatestDurableWorkState(t *testing.T) {
 	}
 }
 
+func TestCheckpointPreservesTaskIdentityAndVerificationMetadata(t *testing.T) {
+	root := t.TempDir()
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	projectID := "prj-task-metadata-12345678"
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "task metadata"}); err != nil {
+		t.Fatal(err)
+	}
+	engine := NewEngine(store, projectID, "task metadata", filepath.Join(root, "checkpoint.json"))
+	want := WorkState{
+		ProjectID:    projectID,
+		ActiveTaskID: "task-a",
+		Task: TaskState{
+			TaskID:                    "task-a",
+			Status:                    contracts.TaskInProgress,
+			CompletionPolicy:          contracts.CompletionPolicyCompletion,
+			LatestVerificationEventID: "evt-verify-a",
+			LatestVerificationKind:    contracts.VerificationUnit,
+			LatestVerificationScope:   "internal/app",
+			LatestErrorRef:            "evt-error-a",
+		},
+	}
+	if err := engine.Save(context.Background(), want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := engine.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ActiveTaskID != want.ActiveTaskID || got.Task.TaskID != want.Task.TaskID ||
+		got.Task.CompletionPolicy != want.Task.CompletionPolicy ||
+		got.Task.LatestVerificationEventID != want.Task.LatestVerificationEventID ||
+		got.Task.LatestVerificationKind != want.Task.LatestVerificationKind ||
+		got.Task.LatestVerificationScope != want.Task.LatestVerificationScope ||
+		got.Task.LatestErrorRef != want.Task.LatestErrorRef {
+		t.Fatalf("task metadata was not persisted: got=%#v want=%#v", got, want)
+	}
+}
+
 func TestActiveSessionBecomesInterruptedButTaskRemainsInProgress(t *testing.T) {
 	lastSeen := time.Now().Add(-10 * time.Minute)
 	state := ClassifySession(contracts.SessionActive, lastSeen, time.Now(), time.Minute)

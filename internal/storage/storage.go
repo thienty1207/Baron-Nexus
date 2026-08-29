@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const currentSchemaVersion = 6
+const currentSchemaVersion = 7
 
 type Store struct {
 	db      *sql.DB
@@ -193,6 +193,11 @@ func (s *Store) migrate(ctx context.Context) error {
 				return fmt.Errorf("apply schema migration: %w", err)
 			}
 		}
+		for _, statement := range taskLedgerSchemaStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply task ledger schema: %w", err)
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_meta(schema_version) VALUES (?)`, currentSchemaVersion); err != nil {
 			return fmt.Errorf("record schema version: %w", err)
 		}
@@ -254,6 +259,16 @@ func (s *Store) migrate(ctx context.Context) error {
 	} else if version == 5 {
 		if _, err := tx.ExecContext(ctx, `UPDATE schema_meta SET schema_version=?`, currentSchemaVersion); err != nil {
 			return fmt.Errorf("record freshness migration: %w", err)
+		}
+	}
+	if version > 0 && version < currentSchemaVersion {
+		for _, statement := range taskLedgerSchemaStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply task ledger migration: %w", err)
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE schema_meta SET schema_version=?`, currentSchemaVersion); err != nil {
+			return fmt.Errorf("record task ledger migration: %w", err)
 		}
 	}
 	if err := ensureKnowledgeFreshnessColumns(ctx, tx); err != nil {
@@ -540,6 +555,9 @@ func (s *Store) MarkMemorySync(ctx context.Context, projectID string, syncedAt t
 }
 
 func (s *Store) InsertEvent(ctx context.Context, event Event) (bool, error) {
+	if contracts.IsTaskEvent(event.Type) {
+		return s.insertTaskEvent(ctx, event)
+	}
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	if event.ProjectID == "" {
