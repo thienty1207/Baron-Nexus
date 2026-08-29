@@ -484,7 +484,7 @@ func (r *Runtime) captureContinuitySummaries(ctx context.Context, request Reques
 
 func shouldSyncSummary(request Request, state continuity.WorkState) bool {
 	switch request.Event {
-	case contracts.EventTaskFailed, contracts.EventTaskBlocked,
+	case contracts.EventTaskFailed, contracts.EventTaskBlocked, contracts.EventTaskInterrupted,
 		contracts.EventSessionCleanClose, contracts.EventSessionInterrupted,
 		contracts.EventHandoffStarted, contracts.EventHandoffCompleted, contracts.EventErrorObserved:
 		return true
