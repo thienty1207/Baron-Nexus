@@ -688,7 +688,7 @@ func TestCodexHookWrapsRecoveryContextInHookSpecificOutput(t *testing.T) {
 	}
 }
 
-func TestHookWiresConfiguredTencentBackendWithoutBlockingLocalState(t *testing.T) {
+func TestHookWiresConfiguredTencentRecallWithoutPromptCapture(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "Project Remote")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -745,14 +745,8 @@ func TestHookWiresConfiguredTencentBackendWithoutBlockingLocalState(t *testing.T
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if len(captureBodies) != 1 {
-		t.Fatalf("expected one remote capture, got %d", len(captureBodies))
-	}
-	if value, ok := captureBodies[0]["project_id"].(string); !ok || !strings.HasPrefix(value, "prj-") {
-		t.Fatalf("unexpected capture project_id: %#v", captureBodies[0])
-	}
-	if captureBodies[0]["team_id"] != "team-a" || captureBodies[0]["agent_id"] != "agent-a" || captureBodies[0]["user_id"] != "user-a" {
-		t.Fatalf("capture isolation was not strict: %#v", captureBodies[0])
+	if len(captureBodies) != 0 {
+		t.Fatalf("user prompt unexpectedly produced remote capture: %d", len(captureBodies))
 	}
 }
 
