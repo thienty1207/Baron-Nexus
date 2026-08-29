@@ -285,6 +285,25 @@ func TestJSONFlagIsAcceptedForReadinessCommands(t *testing.T) {
 	}
 }
 
+func TestTimelineCommandPassesBoundedLocalOutputOptions(t *testing.T) {
+	var out bytes.Buffer
+	called := false
+	code := Run([]string{"timeline", "--limit", "7", "--json"}, Options{
+		Out: &out,
+		Err: &out,
+		TimelineOutput: func(limit int, jsonOutput bool) (string, error) {
+			called = true
+			if limit != 7 || !jsonOutput {
+				t.Fatalf("timeline options limit=%d json=%v", limit, jsonOutput)
+			}
+			return "{\"events\":[]}\n", nil
+		},
+	})
+	if code != ExitSuccess || !called || out.String() != "{\"events\":[]}\n" {
+		t.Fatalf("timeline code=%d called=%v output=%q", code, called, out.String())
+	}
+}
+
 func TestReadinessDiagnosticsArePrintedBeforeNonZeroExit(t *testing.T) {
 	var out bytes.Buffer
 	code := Run([]string{"test"}, Options{

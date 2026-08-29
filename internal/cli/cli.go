@@ -44,6 +44,7 @@ type Options struct {
 	TestOutput         func(jsonOutput bool) (string, error)
 	Status             func(jsonOutput bool) error
 	StatusOutput       func(jsonOutput bool) (string, error)
+	TimelineOutput     func(limit int, jsonOutput bool) (string, error)
 	Doctor             func(jsonOutput bool) error
 	DoctorOutput       func(jsonOutput bool) (string, error)
 	Repair             func() error
@@ -130,6 +131,7 @@ func New(options Options) *cobra.Command {
 	}
 	root.AddCommand(setup)
 	root.AddCommand(readinessCommand("status", "Show the current project and system summary.", options.Status, options.StatusOutput, options.Out))
+	root.AddCommand(timelineCommand(options.TimelineOutput))
 	root.AddCommand(readinessCommand("doctor", "Run deep read-only Baron diagnostics.", options.Doctor, options.DoctorOutput, options.Out))
 
 	repair := &cobra.Command{
@@ -456,6 +458,27 @@ func readinessCommand(name, short string, handler func(bool) error, output func(
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "render machine-readable JSON")
+	return cmd
+}
+
+func timelineCommand(output func(limit int, jsonOutput bool) (string, error)) *cobra.Command {
+	limit := 50
+	jsonOutput := false
+	cmd := &cobra.Command{
+		Use:   "timeline",
+		Short: "Show the bounded local task and event timeline.",
+		Args:  exactArgs(0, "timeline accepts no arguments"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if output == nil {
+				return errors.New("timeline handler is not configured")
+			}
+			text, err := output(limit, jsonOutput)
+			_, _ = io.WriteString(cmd.OutOrStdout(), text)
+			return err
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", limit, "maximum number of local events to show")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "render machine-readable JSON")
 	return cmd
 }

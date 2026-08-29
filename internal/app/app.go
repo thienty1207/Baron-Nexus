@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -78,12 +79,13 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 			_, err := a.SetupProject(context.Background(), path)
 			return classifyError(err)
 		},
-		TestOutput:   a.testOutput,
-		StatusOutput: a.statusOutput,
-		DoctorOutput: a.doctorOutput,
-		Repair:       func() error { return classifyError(a.Repair()) },
-		Backup:       func(destination string) error { return classifyError(a.Backup(context.Background(), destination)) },
-		Restore:      func(archive string) error { return classifyError(a.Restore(context.Background(), archive)) },
+		TestOutput:     a.testOutput,
+		StatusOutput:   a.statusOutput,
+		TimelineOutput: a.timelineOutput,
+		DoctorOutput:   a.doctorOutput,
+		Repair:         func() error { return classifyError(a.Repair()) },
+		Backup:         func(destination string) error { return classifyError(a.Backup(context.Background(), destination)) },
+		Restore:        func(archive string) error { return classifyError(a.Restore(context.Background(), archive)) },
 		RestoreWithOptions: func(archive string, replaceExisting bool) error {
 			return classifyError(a.restoreWithOptions(context.Background(), archive, replaceExisting))
 		},
@@ -434,6 +436,67 @@ func codexAuthFileReady() bool {
 	return false
 }
 
+type localStatusTask struct {
+	TaskID                  string                     `json:"task_id"`
+	Goal                    string                     `json:"goal,omitempty"`
+	Status                  contracts.TaskStatus       `json:"status"`
+	CurrentStep             string                     `json:"current_step,omitempty"`
+	NextAction              string                     `json:"next_action,omitempty"`
+	CompletionVerified      bool                       `json:"completion_verified"`
+	CompletionPolicy        contracts.CompletionPolicy `json:"completion_policy"`
+	LatestVerificationRef   string                     `json:"latest_verification_ref,omitempty"`
+	LatestVerificationKind  contracts.VerificationKind `json:"latest_verification_kind,omitempty"`
+	LatestVerificationScope string                     `json:"latest_verification_scope,omitempty"`
+	LatestErrorRef          string                     `json:"latest_error_ref,omitempty"`
+	UpdatedAt               time.Time                  `json:"updated_at"`
+}
+
+type localStatusTest struct {
+	Command    string `json:"command,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Summary    string `json:"summary,omitempty"`
+	ExitCode   *int   `json:"exit_code,omitempty"`
+	ObservedAt string `json:"observed_at,omitempty"`
+}
+
+type localStatusState struct {
+	Available    bool                   `json:"available"`
+	Error        string                 `json:"error,omitempty"`
+	SessionID    string                 `json:"session_id,omitempty"`
+	SessionState contracts.SessionState `json:"session_state,omitempty"`
+	LastClient   contracts.HookClient   `json:"last_client,omitempty"`
+	UpdatedAt    time.Time              `json:"updated_at,omitempty"`
+	Task         *localStatusTask       `json:"task,omitempty"`
+	LatestTest   localStatusTest        `json:"latest_test"`
+}
+
+type localStatusQueue struct {
+	Pending    int `json:"pending"`
+	Sending    int `json:"sending"`
+	DeadLetter int `json:"dead_letter"`
+}
+
+type localStatusSnapshot struct {
+	Authority         string                        `json:"authority"`
+	GeneratedAt       time.Time                     `json:"generated_at"`
+	ProjectID         string                        `json:"project_id"`
+	ProjectName       string                        `json:"project_name"`
+	Root              string                        `json:"root"`
+	TeamID            string                        `json:"team_id,omitempty"`
+	AgentID           string                        `json:"agent_id,omitempty"`
+	RemoteBound       bool                          `json:"remote_bound"`
+	Repository        continuity.RepositoryEvidence `json:"repository"`
+	RepositoryError   string                        `json:"repository_error,omitempty"`
+	LocalState        localStatusState              `json:"local_state"`
+	ActiveTask        *localStatusTask              `json:"active_task,omitempty"`
+	ActiveSessionID   string                        `json:"active_session_id,omitempty"`
+	UnresolvedTasks   []localStatusTask             `json:"unresolved_tasks"`
+	EventCount        int                           `json:"event_count"`
+	Queue             localStatusQueue              `json:"queue"`
+	Knowledge         map[string]any                `json:"knowledge,omitempty"`
+	TencentDeployment map[string]any                `json:"tencent_deployment,omitempty"`
+}
+
 func (a *App) statusOutput(jsonOutput bool) (string, error) {
 	resolved, err := project.Resolve("")
 	if err != nil {
@@ -442,52 +505,233 @@ func (a *App) statusOutput(jsonOutput bool) (string, error) {
 	if err := a.validateProjectBinding(resolved); err != nil {
 		return "", err
 	}
-	result := map[string]any{
-		"project_id": resolved.ProjectID, "project_name": resolved.Metadata.Name, "root": resolved.Root,
-		"team_id": resolved.Binding.TeamID, "agent_id": resolved.Binding.AgentID,
-		"remote_bound": resolved.Binding.TeamID != "" && resolved.Binding.AgentID != "",
+	ctx := context.Background()
+	repository, repositoryErr := continuity.InspectRepository(ctx, resolved.Root)
+	snapshot := localStatusSnapshot{
+		Authority:       "git_worktree+sqlite",
+		GeneratedAt:     time.Now().UTC(),
+		ProjectID:       resolved.ProjectID,
+		ProjectName:     resolved.Metadata.Name,
+		Root:            resolved.Root,
+		TeamID:          resolved.Binding.TeamID,
+		AgentID:         resolved.Binding.AgentID,
+		RemoteBound:     resolved.Binding.TeamID != "" && resolved.Binding.AgentID != "",
+		Repository:      repository,
+		UnresolvedTasks: []localStatusTask{},
+	}
+	if repositoryErr != nil {
+		snapshot.RepositoryError = config.Redact(repositoryErr.Error(), nil)
+	}
+
+	store, err := storage.Open(filepath.Join(resolved.Root, ".baron", "runtime", "state.db"))
+	if err != nil {
+		return "", fmt.Errorf("open local Baron state: %w", err)
+	}
+	defer store.Close()
+	if snapshot.EventCount, err = store.CountEvents(ctx, resolved.ProjectID); err != nil {
+		return "", fmt.Errorf("read local event count: %w", err)
+	}
+	statuses := []contracts.TaskStatus{contracts.TaskPlanned, contracts.TaskInProgress, contracts.TaskBlocked, contracts.TaskFailed, contracts.TaskInterrupted}
+	tasks, err := store.ListTasks(ctx, resolved.ProjectID, statuses, 100)
+	if err != nil {
+		return "", fmt.Errorf("read local task ledger: %w", err)
+	}
+	for _, task := range tasks {
+		snapshot.UnresolvedTasks = append(snapshot.UnresolvedTasks, localStatusTaskFromRecord(task))
+	}
+	if taskID, sessionID, activeErr := store.ActiveTask(ctx, resolved.ProjectID); activeErr == nil {
+		snapshot.ActiveSessionID = sessionID
+		if task, taskErr := store.GetTask(ctx, resolved.ProjectID, taskID); taskErr == nil {
+			converted := localStatusTaskFromRecord(task)
+			snapshot.ActiveTask = &converted
+		}
+	} else if !errors.Is(activeErr, sql.ErrNoRows) {
+		return "", fmt.Errorf("read active local task: %w", activeErr)
+	}
+	for _, status := range []string{"pending", "sending", "dead_letter"} {
+		count, countErr := store.QueueCount(ctx, resolved.ProjectID, status)
+		if countErr != nil {
+			return "", fmt.Errorf("read local queue: %w", countErr)
+		}
+		switch status {
+		case "pending":
+			snapshot.Queue.Pending = count
+		case "sending":
+			snapshot.Queue.Sending = count
+		case "dead_letter":
+			snapshot.Queue.DeadLetter = count
+		}
+	}
+	engine := continuity.NewEngine(store, resolved.ProjectID, resolved.Metadata.Name, continuity.CheckpointPath(resolved.Root))
+	if state, stateErr := engine.Load(ctx); stateErr == nil {
+		snapshot.LocalState = localStatusStateFromWorkState(state)
+	} else if !errors.Is(stateErr, sql.ErrNoRows) {
+		snapshot.LocalState.Error = config.Redact(stateErr.Error(), nil)
+	} else {
+		snapshot.LocalState.Available = false
+	}
+	if registry, registryErr := store.GetKnowledgeRegistry(ctx, resolved.ProjectID); registryErr == nil {
+		pending := snapshot.Queue.Pending
+		deadLetter := snapshot.Queue.DeadLetter
+		snapshot.Knowledge = map[string]any{
+			"wiki_id": registry.WikiID, "code_graph_id": registry.CodeGraphID,
+			"wiki_status": registry.WikiStatus, "code_graph_status": registry.CodeGraphStatus,
+			"wiki_ingest_status": registry.WikiIngestStatus, "code_graph_sync_status": registry.CodeGraphSyncStatus,
+			"wiki_ingest_version": registry.WikiIngestVersion, "code_graph_commit": registry.CodeGraphCommit,
+			"last_memory_sync_at": registry.LastMemorySyncAt, "conflict_status": registry.ConflictStatus,
+			"superseded_by": registry.SupersededBy, "last_sync_commit": registry.LastSyncCommit,
+			"pending_queue": pending, "dead_letter_queue": deadLetter,
+			"last_error": config.Redact(registry.LastError, nil),
+		}
 	}
 	if global, _, globalErr := a.loadGlobal(); globalErr == nil && global.TencentInstallPath != "" {
 		if manifest, manifestErr := install.ReadTencentDeploymentManifest(global.TencentInstallPath); manifestErr == nil {
-			result["tencent_deployment"] = map[string]any{
-				"repository":              manifest.Repository,
-				"requested_ref":           manifest.RequestedRef,
-				"resolved_commit":         manifest.ResolvedCommit,
-				"container_image_digests": manifest.ContainerImageDigests,
-				"unresolved_containers":   manifest.UnresolvedContainers,
-				"updated_at":              manifest.UpdatedAt,
+			snapshot.TencentDeployment = map[string]any{
+				"repository": manifest.Repository, "requested_ref": manifest.RequestedRef,
+				"resolved_commit": manifest.ResolvedCommit, "container_image_digests": manifest.ContainerImageDigests,
+				"unresolved_containers": manifest.UnresolvedContainers, "updated_at": manifest.UpdatedAt,
 			}
 		}
 	}
-	if store, storeErr := storage.Open(filepath.Join(resolved.Root, ".baron", "runtime", "state.db")); storeErr == nil {
-		defer store.Close()
-		if registry, registryErr := store.GetKnowledgeRegistry(context.Background(), resolved.ProjectID); registryErr == nil {
-			pending, _ := store.QueueCount(context.Background(), resolved.ProjectID, "pending")
-			deadLetter, _ := store.QueueCount(context.Background(), resolved.ProjectID, "dead_letter")
-			result["knowledge"] = map[string]any{
-				"wiki_id": registry.WikiID, "code_graph_id": registry.CodeGraphID,
-				"wiki_status": registry.WikiStatus, "code_graph_status": registry.CodeGraphStatus,
-				"wiki_ingest_status": registry.WikiIngestStatus, "code_graph_sync_status": registry.CodeGraphSyncStatus,
-				"wiki_ingest_version": registry.WikiIngestVersion, "code_graph_commit": registry.CodeGraphCommit,
-				"last_memory_sync_at": registry.LastMemorySyncAt, "conflict_status": registry.ConflictStatus,
-				"superseded_by":    registry.SupersededBy,
-				"last_sync_commit": registry.LastSyncCommit, "pending_queue": pending, "dead_letter_queue": deadLetter,
-				"last_error": registry.LastError,
-			}
+	return renderLocalStatus(snapshot, jsonOutput)
+}
+
+func localStatusTaskFromRecord(task storage.TaskRecord) localStatusTask {
+	return localStatusTask{
+		TaskID: task.TaskID, Goal: statusText(task.Goal, 1024), Status: task.Status,
+		CurrentStep: statusText(task.CurrentStep, 512), NextAction: statusText(task.NextAction, 512),
+		CompletionVerified: task.CompletionVerified, CompletionPolicy: task.CompletionPolicy,
+		LatestVerificationRef: statusText(task.LatestVerificationRef, 256), LatestVerificationKind: task.LatestVerificationKind,
+		LatestVerificationScope: statusText(task.LatestVerificationScope, 256), LatestErrorRef: statusText(task.LatestErrorRef, 256),
+		UpdatedAt: task.UpdatedAt,
+	}
+}
+
+func localStatusTaskFromState(task continuity.TaskState) *localStatusTask {
+	if task.TaskID == "" && task.Goal == "" && task.Status == "" && task.CurrentStep == "" && task.NextAction == "" {
+		return nil
+	}
+	result := localStatusTask{
+		TaskID: task.TaskID, Goal: statusText(task.Goal, 1024), Status: task.Status,
+		CurrentStep: statusText(task.CurrentStep, 512), NextAction: statusText(task.NextAction, 512),
+		CompletionVerified: task.CompletionVerified, CompletionPolicy: task.CompletionPolicy,
+		LatestVerificationKind: task.LatestVerificationKind, LatestVerificationScope: statusText(task.LatestVerificationScope, 256),
+		LatestErrorRef: statusText(task.LatestErrorRef, 256),
+	}
+	if task.LatestVerificationEventID != "" {
+		result.LatestVerificationRef = statusText(task.LatestVerificationEventID, 256)
+	}
+	return &result
+}
+
+func localStatusStateFromWorkState(state continuity.WorkState) localStatusState {
+	return localStatusState{
+		Available: true, SessionID: statusText(state.SessionID, 256), SessionState: state.SessionState,
+		LastClient: state.LastClient, UpdatedAt: state.UpdatedAt, Task: localStatusTaskFromState(state.Task),
+		LatestTest: localStatusTest{Command: statusText(state.LatestTest.Command, 256), Status: statusText(state.LatestTest.Status, 64), Summary: statusText(state.LatestTest.Summary, 512), ExitCode: state.LatestTest.ExitCode, ObservedAt: statusText(state.LatestTest.ObservedAt, 64)},
+	}
+}
+
+func statusText(value string, max int) string {
+	value = config.Redact(strings.TrimSpace(value), nil)
+	if len(value) <= max {
+		return value
+	}
+	const suffix = "...[truncated]"
+	if max <= len(suffix) {
+		return value[:max]
+	}
+	return value[:max-len(suffix)] + suffix
+}
+
+func renderLocalStatus(snapshot localStatusSnapshot, jsonOutput bool) (string, error) {
+	if jsonOutput {
+		data, err := json.Marshal(snapshot)
+		if err != nil {
+			return "", err
 		}
+		return string(append(data, '\n')), nil
+	}
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Authority: Git working tree + SQLite task ledger (Tencent not queried)\nProject: %s\nProject ID: %s\nRoot: %s\n", snapshot.ProjectName, snapshot.ProjectID, snapshot.Root)
+	if snapshot.Repository.Branch != "" || snapshot.Repository.GitHead != "" {
+		fmt.Fprintf(&builder, "Repository: branch=%s head=%s changed_files=%d\n", snapshot.Repository.Branch, snapshot.Repository.GitHead, len(snapshot.Repository.ChangedFiles))
+	} else if snapshot.RepositoryError != "" {
+		fmt.Fprintf(&builder, "Repository: unavailable (%s)\n", snapshot.RepositoryError)
+	} else {
+		fmt.Fprintf(&builder, "Repository: %s\n", snapshot.Repository.StatusSummary)
+	}
+	fmt.Fprintf(&builder, "Local session: %s", snapshot.LocalState.SessionState)
+	if snapshot.LocalState.SessionID != "" {
+		fmt.Fprintf(&builder, " (%s)", snapshot.LocalState.SessionID)
+	}
+	builder.WriteByte('\n')
+	if snapshot.ActiveTask != nil {
+		fmt.Fprintf(&builder, "Active task: %s [%s] %s\n", snapshot.ActiveTask.TaskID, snapshot.ActiveTask.Status, snapshot.ActiveTask.CurrentStep)
+	}
+	fmt.Fprintf(&builder, "Unresolved tasks: %d\n", len(snapshot.UnresolvedTasks))
+	for _, task := range snapshot.UnresolvedTasks {
+		fmt.Fprintf(&builder, "  %s [%s] step=%s next=%s verify=%s/%s\n", task.TaskID, task.Status, task.CurrentStep, task.NextAction, task.LatestVerificationKind, task.LatestVerificationScope)
+	}
+	fmt.Fprintf(&builder, "Events: %d; queue pending=%d sending=%d dead-letter=%d\n", snapshot.EventCount, snapshot.Queue.Pending, snapshot.Queue.Sending, snapshot.Queue.DeadLetter)
+	if snapshot.LocalState.Error != "" {
+		fmt.Fprintf(&builder, "Local state warning: %s\n", snapshot.LocalState.Error)
+	}
+	if snapshot.TencentDeployment != nil {
+		fmt.Fprintf(&builder, "Tencent deployment metadata: %v @ %v (local manifest only)\n", snapshot.TencentDeployment["resolved_commit"], snapshot.TencentDeployment["repository"])
+	}
+	return builder.String(), nil
+}
+
+func (a *App) timelineOutput(limit int, jsonOutput bool) (string, error) {
+	resolved, err := project.Resolve("")
+	if err != nil {
+		return "", &cli.ExitError{Code: cli.ExitProjectNotInitialized, Err: errors.New("project is not initialized; run baron setup")}
+	}
+	if err := a.validateProjectBinding(resolved); err != nil {
+		return "", err
+	}
+	store, err := storage.Open(filepath.Join(resolved.Root, ".baron", "runtime", "state.db"))
+	if err != nil {
+		return "", fmt.Errorf("open local Baron state: %w", err)
+	}
+	defer store.Close()
+	events, err := store.ListTimeline(context.Background(), resolved.ProjectID, limit)
+	if err != nil {
+		return "", err
+	}
+	if events == nil {
+		events = []storage.TimelineEvent{}
 	}
 	if jsonOutput {
-		data, marshalErr := json.Marshal(result)
-		return string(append(data, '\n')), marshalErr
+		data, marshalErr := json.Marshal(map[string]any{"authority": "sqlite_event_ledger", "project_id": resolved.ProjectID, "events": events})
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		return string(append(data, '\n')), nil
 	}
-	text := fmt.Sprintf("Project: %s\nProject ID: %s\nTeam: %s\nAgent: %s\n", resolved.Metadata.Name, resolved.ProjectID, resolved.Binding.TeamID, resolved.Binding.AgentID)
-	if knowledgeState, ok := result["knowledge"].(map[string]any); ok {
-		text += fmt.Sprintf("Wiki: %v (%v; ingest=%v)\nCodeGraph: %v (%v; commit=%v)\nKnowledge queue: %v pending, %v dead-letter\n", knowledgeState["wiki_id"], knowledgeState["wiki_status"], knowledgeState["wiki_ingest_status"], knowledgeState["code_graph_id"], knowledgeState["code_graph_status"], knowledgeState["code_graph_commit"], knowledgeState["pending_queue"], knowledgeState["dead_letter_queue"])
+	var builder strings.Builder
+	fmt.Fprintf(&builder, "Local timeline: %d events (SQLite; raw payload hidden)\n", len(events))
+	for _, event := range events {
+		fmt.Fprintf(&builder, "[%s] %s %s", event.OccurredAt.Format(time.RFC3339), event.Client, event.Type)
+		if event.TaskID != "" {
+			fmt.Fprintf(&builder, " task=%s", event.TaskID)
+		}
+		if event.Status != "" {
+			fmt.Fprintf(&builder, " status=%s", event.Status)
+		}
+		if event.VerificationKind != "" {
+			fmt.Fprintf(&builder, " verify=%s/%s", event.VerificationKind, event.VerificationScope)
+		}
+		if event.ExitCode != nil {
+			fmt.Fprintf(&builder, " exit=%d", *event.ExitCode)
+		}
+		if event.Summary != "" {
+			fmt.Fprintf(&builder, " - %s", event.Summary)
+		}
+		builder.WriteByte('\n')
 	}
-	if deployment, ok := result["tencent_deployment"].(map[string]any); ok {
-		text += fmt.Sprintf("Tencent deployment: %v @ %v\n", deployment["resolved_commit"], deployment["repository"])
-	}
-	return text, nil
+	return builder.String(), nil
 }
 
 func (a *App) Repair() error {

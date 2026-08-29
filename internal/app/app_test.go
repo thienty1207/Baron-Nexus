@@ -478,6 +478,54 @@ func TestApplicationSetupAndHookRoundTrip(t *testing.T) {
 	}
 }
 
+func TestStatusOutputUsesLocalRepositoryAndTaskLedger(t *testing.T) {
+	root := t.TempDir()
+	t.Chdir(root)
+	application := New()
+	application.GlobalPath = filepath.Join(t.TempDir(), "global.json")
+	configured, err := project.Setup(context.Background(), root, project.SetupOptions{
+		Binding: contracts.ProjectBinding{TeamID: "team-local", AgentID: "agent-local", UserID: "user-local"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(filepath.Join(root, ".baron", "runtime", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.InsertEvent(context.Background(), storage.Event{
+		EventID: "status-task-start", ProjectID: configured.ProjectID, SessionID: "status-session",
+		Client: contracts.ClientCodex, Type: contracts.EventTaskStarted, IdempotencyKey: "status-task-start",
+		Payload: json.RawMessage(`{"task_id":"task-status","goal":"continue local implementation","status":"in_progress","current_step":"inspect local evidence","next_action":"run focused tests"}`),
+	}); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	output, err := application.statusOutput(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["authority"] != "git_worktree+sqlite" {
+		t.Fatalf("status authority=%v, want local authority", decoded["authority"])
+	}
+	tasks, ok := decoded["unresolved_tasks"].([]any)
+	if !ok || len(tasks) != 1 {
+		t.Fatalf("status unresolved tasks=%#v", decoded["unresolved_tasks"])
+	}
+	task, ok := tasks[0].(map[string]any)
+	if !ok || task["task_id"] != "task-status" || task["status"] != string(contracts.TaskInProgress) {
+		t.Fatalf("status task=%#v", tasks[0])
+	}
+}
+
 func TestUninstallOptionsPreferRecordedCustomToolHomes(t *testing.T) {
 	root := t.TempDir()
 	dshHome := filepath.Join(root, "custom-dsh")
