@@ -2,9 +2,9 @@
 
 ## Status
 
-Proposed design. Implementation is explicitly gated on user approval of this
-specification. This document extends the existing Baron Nexus architecture; it
-does not authorize a rewrite or production-code changes by itself.
+Approved for implementation. This document extends the existing Baron Nexus
+architecture; it authorizes only the implementation sequence and scope defined
+below, not a rewrite of the existing system.
 
 ## Goal
 
@@ -111,8 +111,11 @@ should support these bounded fields:
     module_paths
     dependencies
     verification_ref
+    verification_kind
+    verification_scope
     latest_error_ref
     completion_verified
+    completion_policy
 
 Large command output and transcript content remain event-journal evidence and
 are referenced by bounded IDs or summaries from the ledger. They are not copied
@@ -160,7 +163,10 @@ Each task record must contain at least:
     module_paths
     dependencies
     completion_verified
+    completion_policy
     verification_event_id or verification_ref
+    latest_verification_kind
+    latest_verification_scope
     latest_error_event_id or latest_error_ref
 
 The implementation may normalize repeated path/module/dependency values into
@@ -181,26 +187,39 @@ must add it without invalidating existing records.
 
 Transition rules:
 
-- task_started creates a new task as in_progress or resumes an existing
-  unresolved task with the same task_id. Repeating an idempotent task_started
-  event does not create a duplicate. A completed task cannot be reopened by a
-  task_started event; a future reopen transition must be explicit and
-  separately specified.
-- task_updated may create a planned task only when the payload explicitly
-  declares status=planned. It changes only explicitly supplied fields and
-  preserves prior evidence when the update is partial.
+- task_started creates a new task as in_progress by default, or as planned when
+  the structured event explicitly declares status=planned. It resumes an
+  existing unresolved task with the same task_id. Repeating an idempotent
+  task_started event does not create a duplicate. A completed task cannot be
+  reopened by a task_started event; a future reopen transition must be
+  explicit and separately specified.
+- task_updated updates an existing task only. An unknown task_id is a
+  validation failure and must not create a task, including when the payload
+  contains status=planned. It changes only explicitly supplied fields and
+  preserves prior evidence when the update is partial. Planned work must be
+  represented by task_started status=planned.
 - task_failed, task_blocked, and task_interrupted preserve the task as
   unresolved and record the latest evidence reference.
-- task_verified requires a verification reference to a local test/build event
-  with exit_code=0 and evidence observed against the task's current Git head
-  and diff state. It sets completion_verified=true but does not erase prior
-  errors.
-- task_completed is accepted as completed only when completion verification is
-  true, the verification evidence is present, and its Git/diff identity still
-  matches the current task state. An unverified or stale completion event is
-  still retained in the journal but cannot promote the projection to completed.
+- task_verified requires a verification reference to local evidence with
+  exit_code=0 where the evidence is command-based, a declared
+  verification_kind, and observations against the task's current Git head and
+  diff state. It records verification evidence and updates the latest
+  verification fields, but it does not set completion_verified unless the
+  verification kind satisfies the task's completion policy.
+- task_completed is accepted as completed only when a verification event with a
+  kind allowed by the task's completion policy is present, the evidence is
+  current, and the Git/diff identity still matches the current task state. An
+  unverified or stale completion event is still retained in the journal but
+  cannot promote the projection to completed.
 - Session close, process stop, Ctrl+C, power loss, or missing hook events never
   promote a task to completed.
+
+Supported verification kinds are unit, integration, build, acceptance, and
+completion. The default completion policy requires kind=completion. A task may
+explicitly declare an acceptance completion policy at task_started; that
+policy must be stored on the task and evaluated deterministically. A unit,
+integration, or build verification can be successful evidence without making
+the whole task completion_verified=true.
 
 ## Local-first write path
 
@@ -262,13 +281,22 @@ the active session is interrupted, when required task evidence is missing, or
 when the local schema/projection cannot be read. A wall-clock age alone must not
 force a remote query.
 
-Overlap is determined in this order:
+Overlap is determined in this order, using strong evidence before weak evidence:
 
-1. Exact changed-file intersection.
-2. Same Go package/module, frontend package, database migration area, or
+1. Exact intersection of strong changed source/module files.
+2. Same strong Go package/module, frontend package, database migration area, or
    crawler/backend/frontend module path.
 3. Shared declared dependency or lockfile/module dependency.
 4. Relevant overlap in Git diff/repository state.
+
+Source files, module/package paths, migration areas, and explicit dependency
+references are strong evidence. README/docs, lockfiles by themselves,
+generated files, and shared metadata/configuration are weak evidence. A
+weak-only intersection must not produce overlap_requires_resume without
+additional strong file, module, dependency, or diff evidence. If only weak
+evidence is available, the gate should return unrelated_work_allowed or
+insufficient_structured_task_scope according to whether the requested scope is
+otherwise explicit; it must not auto-block the new task.
 
 The initial deterministic implementation must use repository-native evidence
 available without a model, including Go module/package paths, frontend
@@ -415,6 +443,10 @@ The implementation is not complete until these behaviors are covered:
 - multiple tasks project correctly from structured task events;
 - completed, failed, blocked, interrupted, and in-progress tasks coexist;
 - unverified completion cannot promote a task to completed;
+- unit, integration, and build verification can pass without setting
+  completion_verified when the task completion policy requires completion;
+- task_updated with an unknown task_id fails validation and never creates a
+  task; planned work is created only by task_started status=planned;
 - interrupted sessions preserve unresolved tasks;
 - Codex-to-DSH local handoff works without Tencent when local evidence is
   sufficient;
@@ -422,6 +454,7 @@ The implementation is not complete until these behaviors are covered:
   sufficient;
 - overlapping unresolved work blocks/resumes before a related new task;
 - unrelated unresolved work remains in backlog while independent work proceeds;
+- weak-only file intersections do not automatically block a new task;
 - normal same-session prompts do not repeat Tencent recall;
 - missing task IDs do not cause task boundaries to be inferred from prose;
 - verification evidence with a mismatched Git head or diff cannot complete a
@@ -461,4 +494,6 @@ only when its deterministic scope overlaps the requested work.
 6. Fix the dynamic release fixture and run the full Linux/Windows verification
    matrix.
 
-No production implementation work begins until this specification is approved.
+Production implementation follows this specification's sequence and TDD
+verification plan. Scope remains limited to local-first reliability/evidence;
+Tencent cloud/off-machine backup and Codex Desktop integration remain deferred.
