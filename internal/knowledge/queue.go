@@ -147,21 +147,34 @@ func (h *QueueHandler) Handle(ctx context.Context, item storage.QueueItem) (stri
 		if h.Core == nil {
 			return "", errors.New("metadata repair requires the MemoryCore client")
 		}
-		knowledgeID := firstNonEmpty(payloadString(payload, "wiki_id"), payloadString(payload, "code_graph_id"))
+		action := payloadString(payload, "action")
+		isCodeGraph := strings.HasPrefix(action, "codegraph_")
+		knowledgeID := payloadString(payload, "wiki_id")
+		if isCodeGraph {
+			knowledgeID = payloadString(payload, "code_graph_id")
+		}
+		knowledgeID = firstNonEmpty(knowledgeID, h.Registry.WikiID)
+		if isCodeGraph {
+			knowledgeID = firstNonEmpty(payloadString(payload, "code_graph_id"), h.Registry.CodeGraphID)
+		}
 		if knowledgeID == "" {
 			return "", errors.New("metadata repair has no knowledge asset ID")
 		}
 		typeName := "wiki"
-		assetID := knowledgeID
-		if payloadString(payload, "code_graph_id") != "" && payloadString(payload, "wiki_id") == "" {
+		assetType := "llm_wiki"
+		name := "Baron Nexus project wiki " + h.Registry.ProjectID
+		metadata := tencent.KnowledgeMetadata{KnowledgeID: knowledgeID, Type: typeName, Name: name, ServiceURL: h.Registry.ServiceURL, TeamID: h.Isolation.TeamID, UserID: h.Isolation.UserID, AgentID: h.Isolation.AgentID, ProjectID: h.Isolation.ProjectID, WikiID: knowledgeID}
+		if isCodeGraph {
 			typeName = "code-graph"
-			assetID = knowledgeID
+			assetType = "code_graph"
+			name = "Baron Nexus project code graph " + h.Registry.ProjectID
+			metadata = tencent.KnowledgeMetadata{KnowledgeID: knowledgeID, Type: typeName, Name: name, ServiceURL: h.Registry.ServiceURL, TeamID: h.Isolation.TeamID, UserID: h.Isolation.UserID, AgentID: h.Isolation.AgentID, ProjectID: h.Isolation.ProjectID, CodeGraphID: knowledgeID, RepoURL: h.Registry.Repository, Repository: h.Registry.Repository, Branch: h.Registry.Branch, Commit: h.Registry.CodeGraphCommit}
 		}
-		metadata, err := h.Core.CreateKnowledgeMetadata(ctx, h.Isolation, tencent.KnowledgeMetadata{KnowledgeID: knowledgeID, Type: typeName, ServiceURL: h.Registry.ServiceURL, TeamID: h.Isolation.TeamID, UserID: h.Isolation.UserID, AgentID: h.Isolation.AgentID, ProjectID: h.Isolation.ProjectID, WikiID: assetID})
-		if typeName == "code-graph" {
-			metadata, err = h.Core.CreateKnowledgeMetadata(ctx, h.Isolation, tencent.KnowledgeMetadata{KnowledgeID: knowledgeID, Type: typeName, ServiceURL: h.Registry.ServiceURL, TeamID: h.Isolation.TeamID, UserID: h.Isolation.UserID, AgentID: h.Isolation.AgentID, ProjectID: h.Isolation.ProjectID, CodeGraphID: assetID})
-		}
+		metadata, err := h.Core.CreateKnowledgeMetadata(ctx, h.Isolation, metadata)
 		if err != nil {
+			return "", err
+		}
+		if err := ensureKnowledgeAssetAndBinding(ctx, h.Core, h.Isolation, knowledgeID, assetType, name, h.Registry.ServiceURL, h.Registry.Repository); err != nil {
 			return "", err
 		}
 		requestID = firstNonEmpty(metadata.KnowledgeID, metadata.ID)

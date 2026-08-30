@@ -1996,11 +1996,43 @@ func (a *App) SetCredential(provider string) error {
 		return err
 	}
 	if strings.TrimSpace(global.TencentInstallPath) != "" {
-		if replaceErr := install.ReplaceTencentRuntimeAPIKey(filepath.Join(global.TencentInstallPath, "deploy", "global-images"), key); replaceErr != nil && !errors.Is(replaceErr, os.ErrNotExist) {
+		deploymentRoot := global.TencentInstallPath
+		deployDir := filepath.Join(deploymentRoot, "deploy", "global-images")
+		if replaceErr := install.ReplaceTencentRuntimeAPIKey(deployDir, key); replaceErr != nil && !errors.Is(replaceErr, os.ErrNotExist) {
 			return replaceErr
 		}
+		if _, startErr := os.Stat(filepath.Join(deployDir, "start-memory-core.sh")); startErr == nil {
+			if reloadErr := install.ReloadTencentDeployment(context.Background(), a.commandRunner(), install.TencentDeploymentOptions{
+				Root: deploymentRoot, UseSudo: runtime.GOOS == "linux",
+			}); reloadErr != nil {
+				return fmt.Errorf("DeepSeek key was saved but Tencent runtime reload failed: %w", reloadErr)
+			}
+		} else if !errors.Is(startErr, os.ErrNotExist) {
+			return startErr
+		}
+	}
+	if err := a.setupCurrentProjectAfterCredentialRotation(); err != nil {
+		return fmt.Errorf("DeepSeek key was saved, but automatic current-project setup failed: %w", err)
 	}
 	return nil
+}
+
+// setupCurrentProjectAfterCredentialRotation retries the project-local setup
+// only when the command is run inside an initialized Baron project. Credential
+// rotation remains useful from any directory and must not initialize an
+// unrelated Git checkout as a side effect.
+func (a *App) setupCurrentProjectAfterCredentialRotation() error {
+	current, err := project.Resolve("")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	setupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	_, err = a.SetupProject(setupCtx, current.Root)
+	return err
 }
 
 func (a *App) resolveTencentAdminKey(deploymentRoot string) (string, error) {

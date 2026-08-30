@@ -1,6 +1,6 @@
 # Baron Nexus
 
-Current release: `0.1.17` — installs a managed project `AGENTS.md` contract.
+Current release: `0.1.19` — installs a managed project `AGENTS.md` contract.
 It also includes full Ubuntu/WSL uninstall cleanup for Docker volume and network
 removal, recreated npm caches, Codex launchers, and Baron update backups. It keeps
 the DSH `0.1.1-rc.2` profile verification fix, idempotent
@@ -35,7 +35,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.17`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.19`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
 latest Node/uv releases at run time, and checks Docker Engine/Compose,
@@ -66,7 +66,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.17`. The PowerShell installer resolves the
+The expected output is `baron 0.1.19`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
@@ -186,12 +186,18 @@ Codex ChatGPT sign-in remains owned by Codex: if global Codex auth is absent,
 Baron prints one action to run `codex` and complete sign-in; once completed,
 that auth is reused across projects and later launches. Baron does not ask for
 the ChatGPT password or copy OAuth secrets. `baron test` is always read-only
-and never prompts. To rotate a key later, run this once; it validates before
-updating the DSH store and any existing Baron-managed Tencent runtime env:
+and never prompts. To rotate a key later, run this from the project you want to
+repair; it validates the key, updates the DSH store and any existing
+Baron-managed Tencent runtime environment, recreates the Tencent containers so
+they receive the new key, and automatically retries the current project's
+Baron setup. No `.env` edit or separate `baron setup` command is required:
 
 ```text
 baron deepseek api_key
 ```
+
+When run outside an initialized Baron project, the command updates the global
+credential and Tencent runtime only; the next project setup uses that key.
 
 To opt into explicit no-prompt launchers for DSH and Codex, run:
 
@@ -219,8 +225,9 @@ An exported `DEEPSEEK_API_KEY` takes precedence over the protected DSH
 credential file for that process and its child commands. To rotate the key
 interactively, unset that environment override first, then run
 `baron deepseek api_key`; the command validates the replacement before
-updating the protected stores. The older `baron credentials set deepseek`
-form remains available as a compatibility alias.
+updating the protected stores and automatically re-syncing the current project.
+The older `baron credentials set deepseek` form remains available as a
+compatibility alias.
 
 `baron tencent-memory init` performs the Linux sudo preflight, installs/starts
 Docker on supported Ubuntu/Debian hosts, validates the provider key, resolves

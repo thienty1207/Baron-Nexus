@@ -137,6 +137,71 @@ func TestScenarioPathSanitizesSessionIdentity(t *testing.T) {
 	}
 }
 
+func TestQueueMetadataRepairUsesCodeGraphAssetWhenBothAssetsExist(t *testing.T) {
+	paths := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["team_id"] != "team-a" || body["agent_id"] != "agent-a" || body["user_id"] != "user-a" || body["project_id"] != "prj-repair-12345678" {
+			t.Fatalf("metadata repair lost isolation on %s: %#v", request.URL.Path, body)
+		}
+		paths[request.URL.Path] = true
+		data := map[string]any{}
+		switch request.URL.Path {
+		case "/v3/knowledge/create":
+			if body["type"] != "code-graph" || body["code_graph_id"] != "graph-1" || body["wiki_id"] != nil {
+				t.Fatalf("metadata repair targeted the wrong asset: %#v", body)
+			}
+			data = map[string]any{"knowledge_id": "graph-1", "id": "graph-1"}
+		case "/v3/meta/asset/list":
+			data = map[string]any{"items": []any{}, "total": 0}
+		case "/v3/meta/asset/create":
+			if body["asset_id"] != "graph-1" || body["asset_type"] != "code_graph" {
+				t.Fatalf("unexpected CodeGraph asset registration: %#v", body)
+			}
+		case "/v3/meta/agent-fixed-asset/list":
+			data = map[string]any{"items": []any{}, "total": 0}
+		case "/v3/meta/agent-fixed-asset/set":
+			bindings, ok := body["bindings"].([]any)
+			if !ok || len(bindings) != 1 {
+				t.Fatalf("unexpected CodeGraph binding: %#v", body["bindings"])
+			}
+		default:
+			t.Fatalf("unexpected metadata repair path: %s", request.URL.Path)
+		}
+		_ = json.NewEncoder(writer).Encode(map[string]any{"code": 0, "message": "ok", "data": data})
+	}))
+	defer server.Close()
+
+	isolation := contracts.IsolationContext{ProjectID: "prj-repair-12345678", TeamID: "team-a", AgentID: "agent-a", UserID: "user-a"}
+	handler := NewQueueHandler(
+		tencent.NewClient(tencent.Config{Endpoint: server.URL, UserKey: "sk-user", ServiceID: "baron", HTTPClient: server.Client()}),
+		nil,
+		nil,
+		isolation,
+		storage.KnowledgeRegistry{
+			ProjectID: isolation.ProjectID, WikiID: "wiki-1", CodeGraphID: "graph-1",
+			ServiceURL: server.URL + "/v3", Repository: "https://example.com/project.git",
+			Branch: "main", CodeGraphCommit: "abc123",
+		},
+	)
+	requestID, err := handler.Handle(context.Background(), storage.QueueItem{
+		ProjectID: isolation.ProjectID, Operation: storage.QueueOperationMetadataRepair,
+		IdempotencyKey: "metadata-repair-codegraph-1",
+		Payload:        []byte(`{"project_id":"prj-repair-12345678","team_id":"team-a","user_id":"user-a","agent_id":"agent-a","wiki_id":"wiki-1","code_graph_id":"graph-1","action":"codegraph_metadata"}`),
+	})
+	if err != nil || requestID != "graph-1" {
+		t.Fatalf("CodeGraph metadata repair failed: request_id=%q err=%v", requestID, err)
+	}
+	for _, path := range []string{"/v3/knowledge/create", "/v3/meta/asset/list", "/v3/meta/asset/create", "/v3/meta/agent-fixed-asset/list", "/v3/meta/agent-fixed-asset/set"} {
+		if !paths[path] {
+			t.Fatalf("metadata repair did not exercise %s: %#v", path, paths)
+		}
+	}
+}
+
 func mustQueueJSON(value any) []byte {
 	encoded, err := json.Marshal(value)
 	if err != nil {

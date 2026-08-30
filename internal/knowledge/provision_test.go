@@ -88,6 +88,13 @@ func TestCollectSeedFilesRedactsLoadedProviderSecrets(t *testing.T) {
 func TestProvisionProjectCreatesAndReusesIsolatedAssets(t *testing.T) {
 	var mu sync.Mutex
 	counts := map[string]int{}
+	registeredAssets := map[string]string{}
+	fixedBindings := []any{
+		map[string]any{
+			"asset_id": "chat-memory-1", "asset_type": "chat_memory",
+			"injection_mode": "summary", "priority": 50, "created_by": "user-a",
+		},
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body map[string]any
 		if request.Body != nil {
@@ -114,6 +121,29 @@ func TestProvisionProjectCreatesAndReusesIsolatedAssets(t *testing.T) {
 		switch request.URL.Path {
 		case "/v3/wiki/list", "/v3/code-graph/list", "/v3/knowledge/list":
 			data = map[string]any{"items": []any{}}
+		case "/v3/meta/asset/list":
+			items := []any{}
+			for assetID, assetType := range registeredAssets {
+				items = append(items, map[string]any{
+					"asset_id": assetID, "team_id": "team-a", "asset_type": assetType,
+					"name": "registered", "owner_user_id": "user-a", "visibility": "team",
+				})
+			}
+			data = map[string]any{"items": items, "total": len(items)}
+		case "/v3/meta/asset/create":
+			assetID, _ := body["asset_id"].(string)
+			assetType, _ := body["asset_type"].(string)
+			registeredAssets[assetID] = assetType
+			data = map[string]any{"asset_id": assetID}
+		case "/v3/meta/agent-fixed-asset/list":
+			data = map[string]any{"items": fixedBindings, "total": len(fixedBindings)}
+		case "/v3/meta/agent-fixed-asset/set":
+			bindings, ok := body["bindings"].([]any)
+			if !ok || len(bindings) == 0 {
+				t.Fatalf("fixed asset binding payload is empty: %#v", body)
+			}
+			fixedBindings = bindings
+			data = map[string]any{"ok": true}
 		case "/v3/wiki/create", "/v3/wiki/get":
 			data = map[string]any{"id": "wiki-1", "wiki_id": "wiki-1", "name": "Baron Nexus project wiki prj-demo-12345678", "status": "ready"}
 		case "/v3/code-graph/create", "/v3/code-graph/get":
@@ -171,6 +201,9 @@ func TestProvisionProjectCreatesAndReusesIsolatedAssets(t *testing.T) {
 	defer mu.Unlock()
 	if counts["/v3/wiki/create"] != 1 || counts["/v3/code-graph/create"] != 1 {
 		t.Fatalf("rerun duplicated remote assets: %#v", counts)
+	}
+	if counts["/v3/meta/asset/create"] != 2 || counts["/v3/meta/agent-fixed-asset/set"] != 2 {
+		t.Fatalf("metadata asset registration/binding was not idempotent: %#v", counts)
 	}
 	if counts["/v3/wiki/raw/write"] != 6 || counts["/v3/wiki/ingest"] != 6 || counts["/v3/code-graph/sync"] != 6 {
 		t.Fatalf("rerun did not refresh bounded knowledge sources: %#v", counts)

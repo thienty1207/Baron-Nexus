@@ -120,6 +120,10 @@ func ProvisionProject(ctx context.Context, options ProvisionOptions) (storage.Kn
 			return registry, recordProvisionError(ctx, options.Store, registry, metadataErr.Error())
 		}
 		registry.WikiMetadataID = firstNonEmpty(metadata.KnowledgeID, metadata.ID)
+		if integrationErr := ensureKnowledgeAssetAndBinding(ctx, options.Core, options.Isolation, registry.WikiID, "llm_wiki", wikiName, registry.ServiceURL, ""); integrationErr != nil {
+			_ = enqueueKnowledgeRetry(ctx, options.Store, registry, storage.QueueOperationMetadataRepair, "wiki_metadata")
+			return registry, recordProvisionError(ctx, options.Store, registry, integrationErr.Error())
+		}
 	}
 	seedFiles, seedErr := CollectSeedFilesWithSecrets(options.Root, options.ProjectName, options.Secrets)
 	if seedErr != nil {
@@ -186,6 +190,10 @@ func ProvisionProject(ctx context.Context, options ProvisionOptions) (storage.Kn
 			return registry, recordProvisionError(ctx, options.Store, registry, metadataErr.Error())
 		}
 		registry.CodeGraphMetadataID = firstNonEmpty(metadata.KnowledgeID, metadata.ID)
+		if integrationErr := ensureKnowledgeAssetAndBinding(ctx, options.Core, options.Isolation, registry.CodeGraphID, "code_graph", graphName, registry.ServiceURL, info.Remote); integrationErr != nil {
+			_ = enqueueKnowledgeRetry(ctx, options.Store, registry, storage.QueueOperationMetadataRepair, "codegraph_metadata")
+			return registry, recordProvisionError(ctx, options.Store, registry, integrationErr.Error())
+		}
 	}
 	if _, err := options.Knowledge.SyncCodeGraph(ctx, options.Isolation, registry.CodeGraphID); err != nil {
 		_ = enqueueKnowledgeRetry(ctx, options.Store, registry, storage.QueueOperationCodeGraphSync, "codegraph_sync")
@@ -319,6 +327,28 @@ func validateProvisioningIsolation(isolation contracts.IsolationContext) error {
 	}
 	if strings.TrimSpace(isolation.UserID) == "" {
 		return errors.New("user_id is required for knowledge provisioning")
+	}
+	return nil
+}
+
+func ensureKnowledgeAssetAndBinding(ctx context.Context, core *tencent.Client, isolation contracts.IsolationContext, assetID, assetType, name, serviceURL, sourceRef string) error {
+	if core == nil {
+		return nil
+	}
+	if err := core.EnsureKnowledgeAsset(ctx, isolation, tencent.KnowledgeAssetRegistration{
+		AssetID:     assetID,
+		AssetType:   assetType,
+		Name:        name,
+		OwnerUserID: isolation.UserID,
+		SourceType:  "manual",
+		SourceRef:   sourceRef,
+		Visibility:  "team",
+		ContentRef:  serviceURL,
+	}); err != nil {
+		return fmt.Errorf("register Tencent %s asset: %w", assetType, err)
+	}
+	if err := core.EnsureAgentFixedAsset(ctx, isolation, assetID, assetType); err != nil {
+		return fmt.Errorf("bind Tencent %s asset to agent: %w", assetType, err)
 	}
 	return nil
 }

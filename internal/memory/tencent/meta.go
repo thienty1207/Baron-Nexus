@@ -23,6 +23,8 @@ func init() {
 		}
 	}
 	allowedMetaPaths["/v3/meta/asset/list-accessible"] = true
+	allowedMetaPaths["/v3/meta/agent-fixed-asset/list"] = true
+	allowedMetaPaths["/v3/meta/agent-fixed-asset/set"] = true
 	allowedMetaPaths["/v3/meta/auth/verify"] = true
 	allowedMetaPaths["/v3/meta/capabilities"] = true
 }

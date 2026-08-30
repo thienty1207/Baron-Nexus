@@ -233,6 +233,36 @@ func TestRestartExitedTencentProxyRepairsPermissionFailureWithoutWeakeningConfig
 	}
 }
 
+func TestReloadTencentDeploymentRestartsExistingStackWithoutFetching(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "tencent-memory")
+	deployDir := filepath.Join(root, "deploy", "global-images")
+	if err := os.MkdirAll(deployDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	startScripts := []string{
+		filepath.Join(deployDir, "start-memory-core.sh"),
+		filepath.Join(deployDir, "start-memory-hub.sh"),
+		filepath.Join(deployDir, "start-proxy.sh"),
+	}
+	for _, startScript := range startScripts {
+		if err := os.WriteFile(startScript, []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture := &commandFixture{available: map[string]bool{}}
+	if err := ReloadTencentDeployment(context.Background(), fixture, TencentDeploymentOptions{Root: root}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.calls) != len(startScripts) {
+		t.Fatalf("reload calls=%#v, want only %d start scripts", fixture.calls, len(startScripts))
+	}
+	for index, startScript := range startScripts {
+		if strings.TrimSpace(fixture.calls[index]) != startScript {
+			t.Fatalf("reload call %d=%q, want %q", index, fixture.calls[index], startScript)
+		}
+	}
+}
+
 func TestEnsureTencentDeploymentPreservesUpstreamEnvAndStartsPinnedStack(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "tencent-memory")
 	deployDir := filepath.Join(root, "deploy", "global-images")

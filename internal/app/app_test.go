@@ -248,6 +248,59 @@ func TestSetCredentialUpdatesDSHAndManagedTencentKeysAfterValidation(t *testing.
 	}
 }
 
+func TestSetCredentialAutomaticallySetsUpCurrentProject(t *testing.T) {
+	dshHome := t.TempDir()
+	t.Setenv("DSH_HOME", dshHome)
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	root := t.TempDir()
+	if _, err := project.Setup(context.Background(), root, project.SetupOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(root)
+
+	deploymentRoot := filepath.Join(t.TempDir(), "tencent")
+	deployDir := filepath.Join(deploymentRoot, "deploy", "global-images")
+	if err := os.MkdirAll(deployDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployDir, ".env"), []byte("MEMORY_LLM_BASE_URL='https://managed-provider.example/v1'\nMEMORY_LLM_API_KEY='old-provider-key'\nPROXY_UPSTREAM_API_KEY='old-provider-key'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"start-memory-core.sh", "start-memory-hub.sh", "start-proxy.sh"} {
+		if err := os.WriteFile(filepath.Join(deployDir, name), []byte("#!/bin/sh\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	globalPath := filepath.Join(t.TempDir(), "global.json")
+	if err := config.SaveGlobalState(globalPath, config.GlobalState{TencentInstallPath: deploymentRoot}); err != nil {
+		t.Fatal(err)
+	}
+	application := New()
+	application.GlobalPath = globalPath
+	application.CommandRunner = &credentialOrderingRunner{}
+	application.ReadSecret = func(io.Reader) ([]byte, error) { return []byte("new-provider-key"), nil }
+	application.ValidateProviderCredential = func(context.Context, string, string) error { return nil }
+	provisionCalls := 0
+	application.ProjectProvisioner = func(context.Context, string, string) (contracts.ProjectBinding, error) {
+		provisionCalls++
+		return contracts.ProjectBinding{TeamID: "team", AgentID: "agent", UserID: "user"}, nil
+	}
+
+	if err := application.SetCredential("deepseek"); err != nil {
+		t.Fatal(err)
+	}
+	if provisionCalls != 1 {
+		t.Fatalf("current project setup calls=%d, want 1", provisionCalls)
+	}
+	runner := application.CommandRunner.(*credentialOrderingRunner)
+	joined := strings.Join(runner.calls, "\n")
+	for _, name := range []string{"start-memory-core.sh", "start-memory-hub.sh", "start-proxy.sh"} {
+		if !strings.Contains(joined, filepath.Join(deployDir, name)) {
+			t.Fatalf("credential rotation did not reload %s: %#v", name, runner.calls)
+		}
+	}
+}
+
 func TestReadinessReportsRejectedProviderCredentialWithoutKeyMaterial(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "rejected-provider-key")
 	application := New()
@@ -1117,6 +1170,13 @@ func TestUnsupportedKnowledgeSurfaceIsMissingWithoutMutatingRegistry(t *testing.
 func TestSetupProjectCreatesAndReusesOneAgentWikiAndCodeGraph(t *testing.T) {
 	var mu sync.Mutex
 	counts := map[string]int{}
+	registeredAssets := map[string]string{}
+	fixedBindings := []any{
+		map[string]any{
+			"asset_id": "chat-memory-1", "asset_type": "chat_memory",
+			"injection_mode": "summary", "priority": 50, "created_by": "user-a",
+		},
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(request.Body).Decode(&body)
@@ -1141,6 +1201,29 @@ func TestSetupProjectCreatesAndReusesOneAgentWikiAndCodeGraph(t *testing.T) {
 			}
 		case "/v3/meta/agent/create":
 			data = map[string]any{"id": "agent-" + projectID, "agent_id": "agent-" + projectID, "description": "Baron project_id=" + projectID}
+		case "/v3/meta/asset/list":
+			items := []any{}
+			for assetID, assetType := range registeredAssets {
+				items = append(items, map[string]any{
+					"asset_id": assetID, "team_id": "team-a", "asset_type": assetType,
+					"name": "registered", "owner_user_id": "user-a", "visibility": "team",
+				})
+			}
+			data = map[string]any{"items": items, "total": len(items)}
+		case "/v3/meta/asset/create":
+			assetID, _ := body["asset_id"].(string)
+			assetType, _ := body["asset_type"].(string)
+			registeredAssets[assetID] = assetType
+			data = map[string]any{"asset_id": assetID}
+		case "/v3/meta/agent-fixed-asset/list":
+			data = map[string]any{"items": fixedBindings, "total": len(fixedBindings)}
+		case "/v3/meta/agent-fixed-asset/set":
+			bindings, ok := body["bindings"].([]any)
+			if !ok || len(bindings) == 0 {
+				t.Fatalf("fixed asset binding payload is empty: %#v", body)
+			}
+			fixedBindings = bindings
+			data = map[string]any{"ok": true}
 		case "/v3/atomic/search":
 			data = map[string]any{"items": []any{}}
 		case "/v3/wiki/list":

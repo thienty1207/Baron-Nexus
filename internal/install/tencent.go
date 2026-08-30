@@ -136,6 +136,44 @@ func EnsureTencentDeployment(ctx context.Context, runner CommandRunner, options 
 	return nil
 }
 
+// ReloadTencentDeployment reapplies the managed global-images environment to
+// the already checked-out stack. It deliberately does not fetch, checkout, or
+// update the Tencent repository; this is used after a credential rotation.
+func ReloadTencentDeployment(ctx context.Context, runner CommandRunner, options TencentDeploymentOptions) error {
+	if runner == nil {
+		return errors.New("Docker deployment runner is not configured")
+	}
+	if strings.TrimSpace(options.Root) == "" {
+		return errors.New("Tencent deployment directory is required")
+	}
+	deployDir := filepath.Join(options.Root, "deploy", "global-images")
+	startScripts := []string{
+		filepath.Join(deployDir, "start-memory-core.sh"),
+		filepath.Join(deployDir, "start-memory-hub.sh"),
+		filepath.Join(deployDir, "start-proxy.sh"),
+	}
+	if err := ensureTencentProxyConfigReadable(ctx, runner, options.UseSudo, deployDir); err != nil {
+		return err
+	}
+	for _, startScript := range startScripts {
+		if err := requireRegularFile(startScript); err != nil {
+			return fmt.Errorf("Tencent deployment reload script is unavailable: %w", err)
+		}
+		if _, err := runManagedScript(ctx, runner, options.UseSudo, false, startScript); err != nil {
+			return fmt.Errorf("Tencent deployment reload failed at %s; inspect the managed global-images .env and Docker logs", filepath.Base(startScript))
+		}
+	}
+	if options.UseSudo {
+		if err := ensureTencentProxyConfigReadable(ctx, runner, options.UseSudo, deployDir); err != nil {
+			return err
+		}
+		if err := restartExitedTencentProxy(ctx, runner); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func restartExitedTencentProxy(ctx context.Context, runner CommandRunner) error {
 	output, err := runSudo(ctx, runner, "docker", "inspect", "--format={{.State.Status}}", "tdai-proxy")
 	if err != nil {
