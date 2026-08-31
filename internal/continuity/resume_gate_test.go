@@ -1,6 +1,7 @@
 package continuity
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/baron-shared-brain/baron/internal/contracts"
@@ -120,6 +121,23 @@ func TestResumeGateSeparatesMissingStateHistoricalRecallAndMissingScope(t *testi
 				t.Fatalf("decision=%#v want outcome=%s", decision, test.outcome)
 			}
 		})
+	}
+}
+
+func TestLocalConversationContextRetainsNewestTurnsWhenHistoryIsBounded(t *testing.T) {
+	messages := []storage.ConversationMessage{
+		{Client: contracts.ClientCodex, SessionID: "old-session", Role: "user", Content: strings.Repeat("old context ", 400)},
+		{Client: contracts.ClientCodex, SessionID: "old-session", Role: "assistant", Content: "old answer"},
+		{Client: contracts.ClientCodex, SessionID: "new-session", Role: "user", Content: "NEWEST_USER_REQUIREMENTS"},
+		{Client: contracts.ClientCodex, SessionID: "new-session", Role: "assistant", Content: "NEWEST_ASSISTANT_SUMMARY"},
+	}
+
+	context := BuildLocalConversationContext(messages, 1000)
+	if !strings.Contains(context, "NEWEST_USER_REQUIREMENTS") || !strings.Contains(context, "NEWEST_ASSISTANT_SUMMARY") {
+		t.Fatalf("newest conversation turns were dropped from bounded context: %s", context)
+	}
+	if strings.Contains(context, "old context") {
+		t.Fatalf("old oversized history should not displace newest turns: %s", context)
 	}
 }
 

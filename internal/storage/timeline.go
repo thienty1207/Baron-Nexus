@@ -139,11 +139,15 @@ func (s *Store) ListConversation(ctx context.Context, projectID, excludeSessionI
 		if message.Role == "user" && previousRole == "user" && message.Content == previousContent {
 			continue
 		}
-		result = append(result, message)
-		previousRole, previousContent = message.Role, message.Content
 		if len(result) == limit {
-			break
+			// The SQL window is bounded for safety, but it is ordered
+			// chronologically for callers. Keep the newest projection rows
+			// instead of returning the oldest part of that window.
+			result = append(result[1:], message)
+		} else {
+			result = append(result, message)
 		}
+		previousRole, previousContent = message.Role, message.Content
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read conversation: %w", err)

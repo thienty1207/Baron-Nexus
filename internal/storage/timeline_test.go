@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -138,5 +139,33 @@ func TestListConversationBoundsContent(t *testing.T) {
 	}
 	if len(messages) != 1 || len(messages[0].Content) > 8192 {
 		t.Fatalf("conversation content was not bounded: %#v", messages)
+	}
+}
+
+func TestListConversationReturnsNewestRowsAfterBoundedScan(t *testing.T) {
+	store := openTaskTestStore(t)
+	ctx := context.Background()
+	projectID := "prj-conversation-newest-12345678"
+	if err := store.RegisterProject(ctx, ProjectRecord{ProjectID: projectID, Root: t.TempDir(), Name: "conversation newest"}); err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 8, 31, 11, 0, 0, 0, time.UTC)
+	for index := 0; index < 30; index++ {
+		id := fmt.Sprintf("conversation-many-%02d", index)
+		if inserted, err := store.InsertEvent(ctx, Event{
+			EventID: id, ProjectID: projectID, SessionID: "old-session", Client: contracts.ClientCodex,
+			Type: contracts.EventUserPrompt, OccurredAt: base.Add(time.Duration(index) * time.Second),
+			IdempotencyKey: id, Payload: json.RawMessage(fmt.Sprintf(`{"prompt":"turn-%02d"}`, index)),
+		}); err != nil || !inserted {
+			t.Fatalf("insert %s: inserted=%v err=%v", id, inserted, err)
+		}
+	}
+
+	messages, err := store.ListConversation(ctx, projectID, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 10 || messages[0].Content != "turn-20" || messages[9].Content != "turn-29" {
+		t.Fatalf("conversation projection did not retain newest rows: %#v", messages)
 	}
 }
