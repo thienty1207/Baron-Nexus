@@ -52,8 +52,9 @@ type Runtime struct {
 }
 
 const (
-	// Hook payloads are event evidence, not an unbounded transcript store. A
-	// bounded row keeps concurrent Codex hooks below the provider timeout.
+	// Hook payloads are bounded event evidence. Conversation fields are
+	// deliberately retained as bounded turns, while raw tool transcripts stay
+	// out of the local ledger and remote memory path.
 	maxHookPayloadBytes      = 64 * 1024
 	maxLifecycleStringBytes  = 8192
 	maxLifecycleMapKeys      = 64
@@ -67,7 +68,7 @@ var lifecyclePayloadPriority = []string{
 	"status", "exit_code", "task_status", "goal", "current_step", "last_successful_step", "next_action",
 	"completion_verified", "completion_policy", "verification_ref", "verification_kind", "verification_scope",
 	"git_head", "diff_hash", "file", "symbol", "changed_files", "module_paths", "dependencies",
-	"last_assistant_message", "response", "raw_output", "baron_payload_truncated",
+	"prompt", "text", "message", "last_assistant_message", "response", "content", "raw_output", "baron_payload_truncated",
 }
 
 func NewRuntime(store *storage.Store, engine *continuity.Engine, projectID string) *Runtime {
@@ -276,6 +277,12 @@ func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error)
 				response.Context += localContext
 			}
 		}
+		if localConversation := r.localConversationContext(ctx, request); localConversation != "" {
+			if response.Context != "" {
+				response.Context += "\n"
+			}
+			response.Context += localConversation
+		}
 	}
 	// The local event and checkpoint are durable before this point. Remote
 	// capture/recall is deliberately best-effort so memory outages never stop
@@ -432,6 +439,37 @@ func (r *Runtime) latestOtherClientContext(ctx context.Context, projectID string
 		html.EscapeString(string(event.Client)), html.EscapeString(string(event.Type)), html.EscapeString(event.SessionID), html.EscapeString(boundedText(content, 4000)))
 }
 
+func (r *Runtime) localConversationContext(ctx context.Context, request Request) string {
+	if r == nil || r.store == nil {
+		return ""
+	}
+	switch request.Event {
+	case contracts.EventSessionStarted:
+		// Codex consumes SessionStart.additionalContext directly.
+	case contracts.EventCheckpointUpdated:
+		// DSH emits checkpoint_updated for every model step. Only the first
+		// step receives the recovered transcript so the same context is not
+		// appended to every tool turn.
+		count, err := r.store.CountSessionEvents(ctx, request.ProjectID, request.SessionID, contracts.EventCheckpointUpdated)
+		if err != nil || count != 1 {
+			return ""
+		}
+	case contracts.EventUserPrompt:
+		// A provider that skips SessionStart still gets one fallback delivery.
+		count, err := r.store.CountSessionEvents(ctx, request.ProjectID, request.SessionID, contracts.EventSessionStarted)
+		if err != nil || count != 0 {
+			return ""
+		}
+	default:
+		return ""
+	}
+	messages, err := r.store.ListConversation(ctx, request.ProjectID, request.SessionID, 24)
+	if err != nil {
+		return ""
+	}
+	return continuity.BuildLocalConversationContext(messages, 5000)
+}
+
 func latestTestHandoffEvidence(test continuity.TestEvidence) string {
 	if test.Command == "" && test.Summary == "" && test.ExitCode == nil {
 		return ""
@@ -498,9 +536,22 @@ func (r *Runtime) captureMemory(ctx context.Context, request Request, state cont
 	if _, err := r.syncer.QueueCapture(ctx, record, key); err != nil {
 		return
 	}
+	if isConversationCapture(request) {
+		// SQLite is authoritative and the queue is durable. Do not put a
+		// network round trip on the provider's prompt/turn hook; lifecycle
+		// boundaries below flush the queued conversation safely.
+		return
+	}
 	flushCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 	_, _ = r.syncer.Flush(flushCtx, 2)
 	cancel()
+}
+
+func isConversationCapture(request Request) bool {
+	if request.Event == contracts.EventUserPrompt || request.Event == contracts.EventAssistantFinal {
+		return true
+	}
+	return request.Event == contracts.EventCheckpointUpdated && payloadField(request.Payload, "prompt") != ""
 }
 
 func (r *Runtime) captureContinuitySummaries(ctx context.Context, request Request, state continuity.WorkState) {
@@ -554,6 +605,12 @@ func shouldSyncSummary(request Request, state continuity.WorkState) bool {
 }
 
 func shouldCaptureRemote(request Request, state continuity.WorkState) bool {
+	if request.Event == contracts.EventUserPrompt || request.Event == contracts.EventAssistantFinal {
+		return true
+	}
+	if request.Event == contracts.EventCheckpointUpdated && payloadField(request.Payload, "prompt") != "" {
+		return true
+	}
 	return shouldSyncSummary(request, state)
 }
 
@@ -765,8 +822,15 @@ func memoryRecord(request Request, state continuity.WorkState) (contracts.Memory
 		return contracts.MemoryRecord{}, false
 	}
 	content := ""
-	for _, key := range []string{"prompt", "text", "message", "response", "summary", "decision", "content"} {
-		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
+	keys := []string{"prompt", "text", "message", "response", "summary", "decision", "content"}
+	if request.Event == contracts.EventAssistantFinal {
+		// DSH may include the latest user prompt alongside the assistant turn.
+		// Prefer the answer fields so the remote conversation ledger preserves
+		// the correct role/content pair.
+		keys = []string{"response", "last_assistant_message", "summary", "text", "message", "content"}
+	}
+	for _, key := range keys {
+		if value := payloadConversationText(payload[key]); value != "" {
 			content = value
 			break
 		}
@@ -826,12 +890,40 @@ func memoryRecord(request Request, state continuity.WorkState) (contracts.Memory
 	if len(evidenceRefs) > 20 {
 		evidenceRefs = evidenceRefs[len(evidenceRefs)-20:]
 	}
+	kind := string(request.Event)
+	if request.Event == contracts.EventCheckpointUpdated && payloadField(request.Payload, "prompt") != "" {
+		// DSH carries user turns through its generic pre-step checkpoint. Keep
+		// the event type in metadata while giving Tencent the correct role.
+		kind = string(contracts.EventUserPrompt)
+	}
 	record := contracts.MemoryRecord{
 		ProjectID: request.ProjectID, SourceClient: request.Client, SessionID: request.SessionID,
-		Kind: string(request.Event), Content: boundedText(content, 4096), Metadata: metadata, EvidenceRefs: evidenceRefs,
+		Kind: kind, Content: boundedText(content, 4096), Metadata: metadata, EvidenceRefs: evidenceRefs,
 	}
 	record.Normalize()
 	return record, true
+}
+
+func payloadConversationText(value any) string {
+	switch value := value.(type) {
+	case string:
+		return boundedText(value, 8192)
+	case []any:
+		parts := make([]string, 0, len(value))
+		for _, item := range value {
+			if part := payloadConversationText(item); part != "" {
+				parts = append(parts, part)
+			}
+		}
+		return boundedText(strings.Join(parts, "\n"), 8192)
+	case map[string]any:
+		for _, key := range []string{"text", "output", "value", "message", "content"} {
+			if part := payloadConversationText(value[key]); part != "" {
+				return part
+			}
+		}
+	}
+	return ""
 }
 
 func boundedText(value string, max int) string {

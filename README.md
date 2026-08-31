@@ -1,6 +1,6 @@
 # Baron Nexus
 
-Current release: `0.1.19` — installs a managed project `AGENTS.md` contract.
+Current release: `0.1.20` — persists bounded chat continuity across sessions.
 It also includes full Ubuntu/WSL uninstall cleanup for Docker volume and network
 removal, recreated npm caches, Codex launchers, and Baron update backups. It keeps
 the DSH `0.1.1-rc.2` profile verification fix, idempotent
@@ -35,7 +35,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.19`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.20`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
 latest Node/uv releases at run time, and checks Docker Engine/Compose,
@@ -66,7 +66,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.19`. The PowerShell installer resolves the
+The expected output is `baron 0.1.20`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
@@ -308,13 +308,16 @@ baron timeline --limit 50
 baron timeline --limit 100 --json
 ```
 
-They read Git and SQLite without an LLM or Tencent request. Prompts, minor tool
-events, and long raw tool output stay local; only bounded summaries for task
+They read Git and SQLite without an LLM or Tencent request. Bounded user prompts
+and assistant final responses are retained as conversation turns in SQLite and
+durably queued locally and flushed to Tencent at lifecycle boundaries for
+cross-session recovery; raw tool arguments, minor tool events, and long raw
+tool output stay local. Only bounded summaries for task
 failure/block, verified completion, important test/build evidence, interruption,
-clean close, or explicit handoff are queued to Tencent. If local evidence is
-complete, same-session and Codex/DSH handoff remain local-only. Tencent recall is
-conditional, cached by the local recovery fingerprint, and never overwrites the
-local task projection.
+clean close, or explicit handoff are queued as continuity memory. If local
+evidence is complete, same-session and Codex/DSH handoff remain local-only.
+Tencent recall is conditional, cached by the local recovery fingerprint, and
+never overwrites the local task projection.
 
 ## Support operations
 

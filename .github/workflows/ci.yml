@@ -16,6 +16,7 @@ jobs:
           go-version: '1.27.0'
       - run: go test ./...
       - run: go vet ./...
+      - run: bash scripts/check-dsh-adapter_test.sh
       - run: GOOS=linux GOARCH=amd64 go build -trimpath -o dist/baron-linux-amd64 ./cmd/baron
       - run: GOOS=windows GOARCH=amd64 go build -trimpath -o dist/baron-windows-amd64.exe ./cmd/baron
 

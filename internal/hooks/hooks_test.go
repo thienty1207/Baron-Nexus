@@ -407,7 +407,7 @@ func TestLocalSufficientPromptSkipsRemoteRecall(t *testing.T) {
 	}
 }
 
-func TestPromptsMinorToolsAndLongOutputsStayLocal(t *testing.T) {
+func TestConversationTurnsAreRemoteAndMinorToolsStayLocal(t *testing.T) {
 	root := t.TempDir()
 	projectID := "prj-local-remote-boundary-12345678"
 	store, err := storage.Open(filepath.Join(root, "state.db"))
@@ -445,14 +445,18 @@ func TestPromptsMinorToolsAndLongOutputsStayLocal(t *testing.T) {
 		}
 	}
 	if len(backend.captured) != 0 {
-		t.Fatalf("prompt/minor tool unexpectedly produced remote captures: %#v", backend.captured)
+		t.Fatalf("prompt capture unexpectedly blocked the hot hook: %#v", backend.captured)
 	}
 	pending, err := store.QueueCount(context.Background(), projectID, "pending")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pending != 0 {
-		t.Fatalf("prompt/minor tool unexpectedly queued remote work: %d", pending)
+	if pending != 1 {
+		t.Fatalf("conversation prompt was not queued for lifecycle delivery: %d", pending)
+	}
+	runtime.flushRemoteQueue(context.Background())
+	if len(backend.captured) != 1 || backend.captured[0].Content != "continue local work" {
+		t.Fatalf("prompt was not captured as bounded conversation memory: %#v", backend.captured)
 	}
 	if count, err := store.CountEvents(context.Background(), projectID); err != nil || count != 2 {
 		t.Fatalf("local event evidence count=%d err=%v", count, err)
@@ -829,7 +833,7 @@ func TestSessionStartContextIncludesBoundedWikiAndCodeGraphCitations(t *testing.
 	}
 }
 
-func TestUserPromptPersistsLocallyWithoutRemoteCapture(t *testing.T) {
+func TestUserPromptPersistsLocallyAndRemotely(t *testing.T) {
 	root := t.TempDir()
 	projectID := "prj-hook-memory-12345678"
 	store, err := storage.Open(filepath.Join(root, "state.db"))
@@ -853,7 +857,14 @@ func TestUserPromptPersistsLocallyWithoutRemoteCapture(t *testing.T) {
 		t.Fatalf("prompt hook failed: %#v %v", response, err)
 	}
 	if len(backend.captured) != 0 {
-		t.Fatalf("user prompt unexpectedly produced remote capture: %#v", backend.captured)
+		t.Fatalf("user prompt should remain non-blocking until a lifecycle flush: %#v", backend.captured)
+	}
+	if pending, pendingErr := store.QueueCount(context.Background(), projectID, "pending"); pendingErr != nil || pending != 1 {
+		t.Fatalf("conversation prompt was not durably queued: pending=%d err=%v", pending, pendingErr)
+	}
+	runtime.flushRemoteQueue(context.Background())
+	if len(backend.captured) != 1 || backend.captured[0].Kind != string(contracts.EventUserPrompt) {
+		t.Fatalf("user prompt was not captured as conversation memory: %#v", backend.captured)
 	}
 	if _, err := store.GetWorkState(context.Background(), projectID); err != nil {
 		t.Fatalf("local state was not persisted before memory delivery: %v", err)
@@ -864,6 +875,78 @@ func TestUserPromptPersistsLocallyWithoutRemoteCapture(t *testing.T) {
 	}
 	if len(entries) != 1 || strings.Contains(entries[0].Summary, "sk-hook-secret") {
 		t.Fatalf("unsafe local prompt evidence missing or exposed: %#v", entries)
+	}
+}
+
+func TestSessionStartReturnsPreviousConversationFromLocalLedger(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-local-conversation-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "local conversation"}); err != nil {
+		t.Fatal(err)
+	}
+	engine := continuity.NewEngine(store, projectID, "local conversation", filepath.Join(root, "checkpoint.json"))
+	if err := engine.Save(context.Background(), continuity.WorkState{
+		ProjectID: projectID, ProjectName: "local conversation", SessionID: "old-session", SessionState: contracts.SessionCleanClosed,
+		Repository: continuity.RepositoryEvidence{GitHead: "head-1", Branch: "main", DiffHash: "diff-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runtime := NewRuntime(store, engine, projectID)
+	oldEvents := []Request{
+		{Client: contracts.ClientCodex, Event: contracts.EventSessionStarted, ProjectID: projectID, SessionID: "old-session", IdempotencyKey: "conversation-start"},
+		{Client: contracts.ClientCodex, Event: contracts.EventUserPrompt, ProjectID: projectID, SessionID: "old-session", IdempotencyKey: "conversation-prompt", Payload: json.RawMessage(`{"prompt":"What did I ask about the Ferris crawler?"}`)},
+		{Client: contracts.ClientCodex, Event: contracts.EventAssistantFinal, ProjectID: projectID, SessionID: "old-session", IdempotencyKey: "conversation-answer", Payload: json.RawMessage(`{"response":"You asked about the crawler persistence flow."}`)},
+		{Client: contracts.ClientCodex, Event: contracts.EventSessionCleanClose, ProjectID: projectID, SessionID: "old-session", IdempotencyKey: "conversation-close"},
+	}
+	for _, request := range oldEvents {
+		if _, err := runtime.Handle(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response, err := runtime.Handle(context.Background(), Request{
+		Client: contracts.ClientCodex, Event: contracts.EventSessionStarted, ProjectID: projectID, SessionID: "new-session", IdempotencyKey: "conversation-new-start",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"baron-local-conversation", "What did I ask about the Ferris crawler?", "You asked about the crawler persistence flow."} {
+		if !strings.Contains(response.Context, want) {
+			t.Fatalf("new session context omitted %q: %s", want, response.Context)
+		}
+	}
+}
+
+func TestAssistantFinalIsCapturedAsConversationMemoryWithoutHandoffFlag(t *testing.T) {
+	root := t.TempDir()
+	projectID := "prj-assistant-conversation-12345678"
+	store, err := storage.Open(filepath.Join(root, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RegisterProject(context.Background(), storage.ProjectRecord{ProjectID: projectID, Root: root, Name: "assistant conversation"}); err != nil {
+		t.Fatal(err)
+	}
+	backend := &recordingHookBackend{}
+	runtime := NewRuntime(store, continuity.NewEngine(store, projectID, "assistant conversation", filepath.Join(root, "checkpoint.json")), projectID)
+	runtime.SetMemoryBackend(backend, contracts.IsolationContext{ProjectID: projectID, TeamID: "team", AgentID: "agent", UserID: "user"})
+	response, err := runtime.Handle(context.Background(), Request{
+		Client: contracts.ClientCodex, Event: contracts.EventAssistantFinal, ProjectID: projectID, SessionID: "session", IdempotencyKey: "assistant-conversation-final",
+		Payload: json.RawMessage(`{"prompt":"What about the crawler?","response":"The crawler persistence flow is now clear."}`),
+	})
+	if err != nil || !response.OK {
+		t.Fatalf("assistant final hook failed: %#v %v", response, err)
+	}
+	if len(backend.captured) != 1 || backend.captured[0].Kind != string(contracts.EventAssistantFinal) {
+		t.Fatalf("assistant final was not captured as conversation memory: %#v", backend.captured)
+	}
+	if backend.captured[0].Content != "The crawler persistence flow is now clear." {
+		t.Fatalf("assistant final captured the wrong turn: %#v", backend.captured[0])
 	}
 }
 

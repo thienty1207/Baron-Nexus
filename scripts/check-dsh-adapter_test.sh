@@ -17,10 +17,12 @@ let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
+  let parsed = {};
+  try { parsed = JSON.parse(input); } catch {}
   process.stdout.write(JSON.stringify({
     ok: true,
     historical_context_available: true,
-    context: "[historical-reference] CODEX_TO_DSH_ADAPTER_TEST_SENTINEL " + (process.argv[4] || "unknown")
+    context: "[historical-reference] CODEX_TO_DSH_ADAPTER_TEST_SENTINEL " + (process.argv[4] || "unknown") + " " + JSON.stringify(parsed)
   }));
 });
 `, { mode: 0o700 });
@@ -44,6 +46,28 @@ assert.equal(decision.messages[1].role, "user");
 assert.equal(decision.messages[1].source.kind, "plugin");
 assert.equal(decision.messages[1].source.form, "recall");
 assert.match(decision.messages[1].content[0].text, /CODEX_TO_DSH_ADAPTER_TEST_SENTINEL/);
+assert.match(decision.messages[1].content[0].text, /"prompt":"continue"/);
+const scalarPromptDecision = await handlers.get("agent/pre-step")({
+  agent: { id: "session-dsh-scalar-test" },
+  prompt: "SCALAR_DSH_PROMPT_SENTINEL"
+}, async () => ({
+  kind: "enter",
+  messages: [{ role: "user", content: [{ type: "text", text: "continue" }] }]
+}));
+assert.match(scalarPromptDecision.messages[1].content[0].text, /SCALAR_DSH_PROMPT_SENTINEL/);
+const finalResponse = await handlers.get("agent/turn-stopping")({
+  agent: {
+    id: "session-dsh-final-test",
+    session: { deriveMessages: () => [
+      { role: "user", content: [{ type: "text", text: "ACTUAL_DSH_USER_TURN" }] },
+      { role: "user", source: { kind: "plugin", form: "recall" }, content: [{ type: "text", text: "DO_NOT_REPLAY_RECALL" }] },
+      { role: "assistant", content: [{ type: "text", text: "ACTUAL_DSH_ASSISTANT_TURN" }] },
+    ] },
+  },
+});
+assert.match(finalResponse.context, /"prompt":"ACTUAL_DSH_USER_TURN"/);
+assert.match(finalResponse.context, /"response":"ACTUAL_DSH_ASSISTANT_TURN"/);
+assert.doesNotMatch(finalResponse.context, /DO_NOT_REPLAY_RECALL/);
 const toolResult = await handlers.get("tools/result")({
   name: "bash",
   arguments: { command: "bash -lc 'exit 23'" },

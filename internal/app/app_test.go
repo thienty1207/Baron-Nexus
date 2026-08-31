@@ -767,6 +767,65 @@ func TestCodexHookWrapsRecoveryContextInHookSpecificOutput(t *testing.T) {
 	}
 }
 
+func TestCodexSessionStartInjectsPreviousConversationFromSQLite(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Project Conversation")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	application := New()
+	application.GlobalPath = filepath.Join(t.TempDir(), "global.json")
+	application.ProjectProvisioner = func(context.Context, string, string) (contracts.ProjectBinding, error) {
+		return contracts.ProjectBinding{TeamID: "team-conversation", AgentID: "agent-conversation", UserID: "user-conversation"}, nil
+	}
+	project, err := application.SetupProject(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(filepath.Join(root, ".baron", "runtime", "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	for _, event := range []storage.Event{
+		{EventID: "app-conversation-prompt", ProjectID: project.ProjectID, SessionID: "old-session", Client: contracts.ClientCodex, Type: contracts.EventUserPrompt, OccurredAt: time.Now().UTC(), IdempotencyKey: "app-conversation-prompt", Payload: json.RawMessage(`{"prompt":"What did I ask before restarting?"}`)},
+		{EventID: "app-conversation-answer", ProjectID: project.ProjectID, SessionID: "old-session", Client: contracts.ClientCodex, Type: contracts.EventAssistantFinal, OccurredAt: time.Now().UTC().Add(time.Second), IdempotencyKey: "app-conversation-answer", Payload: json.RawMessage(`{"response":"You asked about SQLite recovery."}`)},
+	} {
+		if inserted, insertErr := store.InsertEvent(ctx, event); insertErr != nil || !inserted {
+			t.Fatalf("insert conversation event: inserted=%v err=%v", inserted, insertErr)
+		}
+	}
+	engine := continuity.NewEngine(store, project.ProjectID, project.Metadata.Name, filepath.Join(root, ".baron", "checkpoint.json"))
+	if err := engine.Save(ctx, continuity.WorkState{
+		ProjectID: project.ProjectID, ProjectName: project.Metadata.Name, SessionID: "old-session", SessionState: contracts.SessionCleanClosed,
+		Repository: continuity.RepositoryEvidence{GitHead: "head-conversation", Branch: "main", DiffHash: "diff-conversation"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := application.HandleHook(ctx, "codex", "SessionStart", root, bytes.NewBufferString(`{"session_id":"new-session"}`), &output); err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(output.Bytes(), &response); err != nil {
+		t.Fatalf("invalid Codex hook output: %v; output=%s", err, output.String())
+	}
+	hookOutput, ok := response["hookSpecificOutput"].(map[string]any)
+	if !ok {
+		t.Fatalf("Codex-specific hook output missing: %s", output.String())
+	}
+	contextText, ok := hookOutput["additionalContext"].(string)
+	if !ok {
+		t.Fatalf("Codex additionalContext missing: %s", output.String())
+	}
+	for _, want := range []string{"baron-local-conversation", "What did I ask before restarting?", "You asked about SQLite recovery."} {
+		if !strings.Contains(contextText, want) {
+			t.Fatalf("Codex additionalContext omitted %q: %s", want, contextText)
+		}
+	}
+}
+
 func TestCodexHookFailureResponsesRespectEventSchemas(t *testing.T) {
 	tests := []struct {
 		event          string
@@ -870,7 +929,7 @@ func TestCodexPreToolUseResponseOmitsUnsupportedContinue(t *testing.T) {
 	}
 }
 
-func TestHookWiresConfiguredTencentRecallWithoutPromptCapture(t *testing.T) {
+func TestHookWiresConfiguredTencentRecallWithPromptCapture(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "Project Remote")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
@@ -926,9 +985,27 @@ func TestHookWiresConfiguredTencentRecallWithoutPromptCapture(t *testing.T) {
 		t.Fatalf("remote context was not returned: %s", output.String())
 	}
 	mu.Lock()
-	defer mu.Unlock()
 	if len(captureBodies) != 0 {
-		t.Fatalf("user prompt unexpectedly produced remote capture: %d", len(captureBodies))
+		mu.Unlock()
+		t.Fatalf("prompt hook performed a synchronous remote capture: %d", len(captureBodies))
+	}
+	mu.Unlock()
+	var nextSessionOutput bytes.Buffer
+	if err := application.HandleHook(context.Background(), "codex", "SessionStart", root, bytes.NewBufferString(`{"session_id":"next-session"}`), &nextSessionOutput); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(captureBodies) != 1 {
+		t.Fatalf("user prompt did not produce remote capture: %d", len(captureBodies))
+	}
+	messages, ok := captureBodies[0]["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("remote capture omitted conversation message: %#v", captureBodies[0])
+	}
+	message, ok := messages[0].(map[string]any)
+	if !ok || message["role"] != "user" || message["content"] != "continue" {
+		t.Fatalf("remote capture has wrong conversation turn: %#v", captureBodies[0])
 	}
 }
 

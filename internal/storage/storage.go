@@ -311,6 +311,8 @@ var schemaStatements = []string{
 		UNIQUE(project_id, idempotency_key)
 	)`,
 	`CREATE INDEX IF NOT EXISTS events_project_time ON events(project_id, occurred_at)`,
+	`CREATE INDEX IF NOT EXISTS events_project_type_time ON events(project_id, event_type, occurred_at)`,
+	`CREATE INDEX IF NOT EXISTS events_project_session_type ON events(project_id, session_id, event_type)`,
 	`CREATE TABLE IF NOT EXISTS work_state (
 		project_id TEXT PRIMARY KEY REFERENCES projects(project_id) ON DELETE CASCADE,
 		state_json BLOB NOT NULL,

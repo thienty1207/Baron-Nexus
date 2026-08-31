@@ -180,12 +180,12 @@ function lifecyclePayload(event: BaronDSHEvent, payload: unknown): Record<string
   if (sessionID !== "") result.session_id = sessionID;
   const cwd = firstString(session.header && isRecord(session.header) ? session.header.cwd : undefined, root.cwd);
   if (cwd !== "") result.cwd = cwd;
-  for (const key of ["source", "turn", "step", "goal", "current_step", "next_action", "task_status", "completion_verified", "status", "command", "file", "symbol", "test", "exit_code", "class"]) {
+  for (const key of ["source", "turn", "step", "goal", "current_step", "next_action", "task_status", "completion_verified", "status", "command", "file", "symbol", "test", "exit_code", "class", "prompt", "text", "message", "response", "last_assistant_message", "summary", "decision", "content", "tool_output", "tool_response"]) {
     const value = root[key];
     if (isSafeScalar(value)) result[key] = value;
   }
-  const messages = textFromMessages(root.messages);
-  if (messages !== "") result.prompt = messages;
+  const prompt = latestUserText(root);
+  if (prompt !== "") result.prompt = prompt;
   const execution = isRecord(root.execution) ? root.execution : root;
   const executionArguments = isRecord(execution.arguments) ? execution.arguments : {};
   const executionCommand = firstString(executionArguments.command, executionArguments.cmd, execution.command, execution.tool, execution.name, execution.tool_name);
@@ -357,9 +357,31 @@ function latestAssistantText(agent: Record<string, unknown>): string {
   return "";
 }
 
-function textFromMessages(messages: unknown): string {
-  if (!Array.isArray(messages)) return "";
-  return messages.map((message) => isRecord(message) ? textFromContent(message.content) : "").filter(Boolean).join("\n").slice(0, 12000);
+function latestUserText(payload: Record<string, unknown>): string {
+  const agent = isRecord(payload.agent) ? payload.agent : {};
+  const session = isRecord(payload.session) ? payload.session : isRecord(agent.session) ? agent.session : {};
+  let messages: unknown[] = [];
+  if (typeof session.deriveMessages === "function") {
+    try {
+      const derived = session.deriveMessages.call(session);
+      if (Array.isArray(derived)) messages = derived;
+    } catch {
+      messages = [];
+    }
+  }
+  if (messages.length === 0 && Array.isArray(payload.messages)) messages = payload.messages;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!isRecord(message) || message.role !== "user" || isRecallMessage(message)) continue;
+    const text = textFromContent(message.content);
+    if (text !== "") return text;
+  }
+  return firstString(payload.prompt, payload.text, payload.message);
+}
+
+function isRecallMessage(message: Record<string, unknown>): boolean {
+  const source = isRecord(message.source) ? message.source : {};
+  return source.kind === "plugin" && source.form === "recall";
 }
 
 function textFromContent(content: unknown): string {
