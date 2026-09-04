@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/baron-shared-brain/baron/internal/testsupport"
 )
 
 func TestCodexProjectTrustedReadsPersistedProjectTrust(t *testing.T) {
@@ -321,6 +323,23 @@ func TestInstallCodexRefreshesExistingBinaryToLatest(t *testing.T) {
 	}
 }
 
+func TestInstallCodexLatestReusesExistingBinaryWhenNPMIsUnavailable(t *testing.T) {
+	fixture := &commandFixture{available: map[string]bool{"codex": true}, outputs: map[string]string{
+		"codex --version": "codex-cli 0.150.1",
+	}}
+
+	report, err := InstallCodexLatestWithReport(context.Background(), fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Source != "existing:codex" || report.State.LocalVersion != "0.150.1" || !report.State.Installed {
+		t.Fatalf("unexpected existing Codex fallback report: %#v", report)
+	}
+	if len(fixture.calls) != 1 || fixture.calls[0] != "codex --version" {
+		t.Fatalf("fallback should only verify the existing Codex binary: %#v", fixture.calls)
+	}
+}
+
 func TestInstallCodexFallsBackToSudoForRootOwnedGlobalNpmPrefix(t *testing.T) {
 	fixture := &npmGlobalPermissionFixture{
 		commandFixture: &commandFixture{available: map[string]bool{"npm": true, "sudo": true}, outputs: map[string]string{}},
@@ -543,10 +562,13 @@ func TestEmbeddedDSHAdapterMaterializesPrivateBaronOwnedPackage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, marker := range []string{"task_id", "verification_kind", "onTaskStarted", "onTaskCompleted"} {
+	for _, marker := range []string{"task_id", "verification_kind", "onTaskStarted", "onTaskCompleted", "spawnBaron", "ComSpec"} {
 		if !strings.Contains(string(data), marker) {
 			t.Fatalf("DSH adapter missing structured task marker %q", marker)
 		}
+	}
+	if !testsupport.UnixModeBitsReliable() {
+		t.Skip("Windows ACLs do not expose Unix permission bits")
 	}
 	if info, err := os.Stat(target); err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("adapter target permissions are not private: info=%v err=%v", info, err)

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "base_release": "v0.1.21",
+  "purpose": "Secret-free legacy update compatibility fixture contract",
+  "required_surfaces": [
+    "git working tree identity",
+    "SQLite task and event rows",
+    "Tencent project and asset identities",
+    "Tencent pending and ready states",
+    "Docker ownership sentinels",
+    "DSH user-owned configuration",
+    "Codex user-owned hooks",
+    "Baron hook count",
+    "credential key-shape fingerprints",
+    "managed component receipts"
+  ],
+  "expected_preserved": [
+    "interrupted local task remains resumable",
+    "pending Tencent asset remains pending or advances to ready",
+    "custom AGENTS.md content outside the managed block remains unchanged",
+    "non-Baron launcher collision remains untouched",
+    "user source and user credentials remain outside Baron ownership"
+  ],
+  "required_negative_cases": [
+    "SQLite row loss",
+    "Tencent identity loss",
+    "user hook/config mutation",
+    "credential shape loss",
+    "missing managed receipt",
+    "invalid rollback"
+  ]
+}

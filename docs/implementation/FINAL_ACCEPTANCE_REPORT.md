@@ -320,6 +320,28 @@ These are environment limitations, not converted mock passes:
   latest-dependency/provider/CodeGraph/Wiki/Skill acceptance is not inferred
   from local fixtures.
 
+## v0.1.22 candidate evidence - 2026-09-04
+
+The current worktree contains the managed-runtime and report-only Strix
+candidate described in `docs/implementation/RELEASE_0.1.22.md`.
+
+- `configs/managed-runtime-catalog.json` validates with ten real hash-pinned
+  releases and ten required components for Linux amd64 and Windows amd64.
+- The opt-in real-catalog acceptance staged the complete Windows amd64 bundle,
+  verified generation receipts and launchers, and passed.
+- Fresh Go tests, vet, formatting, diff checks, adapter checks, catalog
+  validation, legacy compatibility, installer preflight, platform guidance,
+  branding, and Linux/Windows cross-build checks pass.
+- The full race suite passes in `golang:1.27-bookworm` with GCC through Ubuntu
+  WSL2. Native Windows race execution remains unavailable because this host has
+  no `gcc`/cgo compiler.
+- Native Windows Strix remains fail-closed until a verified Ubuntu WSL2 + Docker
+  bridge is production-wired. `pentest stop` currently persists stopped state
+  but does not claim to kill an external Strix process/container.
+- The release gate is intentionally still blocked by unchecked roadmap phases
+  P19, P22, and P27. These external acceptance gaps are not replaced by local
+  fixtures or by the managed catalog test.
+
 ## Final status
 
 FINAL STATUS: BLOCKED

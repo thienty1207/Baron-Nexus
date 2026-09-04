@@ -23,6 +23,37 @@ type ProgressReporter interface {
 	Download(label string, current, total int64)
 }
 
+type JobProgress struct {
+	JobID   string
+	Phase   string
+	Current int64
+	Total   int64
+	Detail  string
+}
+
+func RenderPentestProgress(reporter ProgressReporter, progress JobProgress) {
+	if reporter == nil {
+		return
+	}
+	jobID := strings.TrimSpace(progress.JobID)
+	phase := strings.TrimSpace(progress.Phase)
+	if jobID == "" {
+		jobID = "unknown"
+	}
+	if phase == "" {
+		phase = "working"
+	}
+	label := "Pentest " + jobID + ": " + phase
+	if detail := strings.TrimSpace(progress.Detail); detail != "" {
+		label += " - " + detail
+	}
+	if progress.Total > 0 {
+		reporter.Download(label, progress.Current, progress.Total)
+		return
+	}
+	reporter.Step(label)
+}
+
 type ProgressUI struct {
 	writer       io.Writer
 	mu           sync.Mutex

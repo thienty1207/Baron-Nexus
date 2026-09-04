@@ -4,6 +4,16 @@ import { randomUUID } from "node:crypto";
 export const name = "baron-dsh-adapter";
 export const version = "0.1.0";
 
+export const TASK_EVENTS = Object.freeze([
+  "task_started",
+  "task_updated",
+  "task_failed",
+  "task_blocked",
+  "task_verified",
+  "task_completed",
+  "task_interrupted",
+]);
+
 export function apply(ctx) {
   const adapter = createBaronAdapter();
   ctx.on("agent/session-start", (payload) => adapter.onSessionStart(payload));
@@ -44,7 +54,7 @@ export function createBaronAdapter(options = {}) {
       const toolEvidence = latestToolEvidence(payload);
       if (toolEvidence !== undefined) await onToolFinished(toolEvidence);
       const decision = next ? await next() : { kind: "enter", messages: [] };
-      return addHistoricalContext(decision, response);
+      return addPentestDirective(addHistoricalContext(decision, response), payload);
     },
     onToolStarted: async (payload) => {
       const execution = toolExecutionRecord(payload);
@@ -73,12 +83,19 @@ export function createBaronAdapter(options = {}) {
       return response;
     },
     onFlush: (payload) => emit("session_clean_closed", lifecyclePayload("session_clean_closed", payload)),
+    onTaskStarted: (payload) => emit("task_started", lifecyclePayload("task_started", payload)),
+    onTaskUpdated: (payload) => emit("task_updated", lifecyclePayload("task_updated", payload)),
+    onTaskFailed: (payload) => emit("task_failed", lifecyclePayload("task_failed", payload)),
+    onTaskBlocked: (payload) => emit("task_blocked", lifecyclePayload("task_blocked", payload)),
+    onTaskVerified: (payload) => emit("task_verified", lifecyclePayload("task_verified", payload)),
+    onTaskCompleted: (payload) => emit("task_completed", lifecyclePayload("task_completed", payload)),
+    onTaskInterrupted: (payload) => emit("task_interrupted", lifecyclePayload("task_interrupted", payload)),
   };
 }
 
 function invoke(binary, cwd, timeoutMs, event, payload) {
   return new Promise((resolve) => {
-    const child = spawn(binary, ["hook", "dsh", event], { cwd, stdio: ["pipe", "pipe", "ignore"] });
+    const child = spawnBaron(binary, ["hook", "dsh", event], { cwd, stdio: ["pipe", "pipe", "ignore"] });
     let output = "";
     const timer = setTimeout(() => {
       child.kill();
@@ -101,6 +118,13 @@ function invoke(binary, cwd, timeoutMs, event, payload) {
       resolve({ ok: false, error: error instanceof Error ? error.message : "cannot serialize DSH lifecycle payload" });
     }
   });
+}
+
+function spawnBaron(binary, args, options) {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(binary)) {
+    return spawn(process.env.ComSpec || "cmd.exe", ["/d", "/c", binary, ...args], options);
+  }
+  return spawn(binary, args, options);
 }
 
 function addHistoricalContext(decision, response) {
@@ -129,9 +153,18 @@ function lifecyclePayload(event, payload) {
   const header = isRecord(session.header) ? session.header : {};
   const cwd = firstString(header.cwd, root.cwd);
   if (cwd !== "") result.cwd = cwd;
-  for (const key of ["source", "turn", "step", "goal", "current_step", "next_action", "task_status", "completion_verified", "status", "command", "file", "symbol", "test", "exit_code", "class", "prompt", "text", "message", "response", "last_assistant_message", "summary", "decision", "content", "tool_output", "tool_response"]) {
-    const value = root[key];
+  const task = isRecord(root.task) ? root.task : {};
+  const taskID = firstString(root.task_id, root.taskId, task.task_id, task.id);
+  const activeTaskID = firstString(root.active_task_id, root.activeTaskId);
+  if (taskID !== "") result.task_id = taskID;
+  if (activeTaskID !== "") result.active_task_id = activeTaskID;
+  for (const key of ["source", "turn", "step", "goal", "current_step", "next_action", "task_status", "completion_verified", "completion_policy", "status", "command", "file", "symbol", "test", "exit_code", "class", "verification_ref", "verification_kind", "verification_scope", "latest_error_ref", "module_path", "prompt", "text", "message", "response", "last_assistant_message", "summary", "decision", "content", "tool_output", "tool_response"]) {
+    const value = root[key] !== undefined ? root[key] : task[key];
     if (isSafeScalar(value)) result[key] = value;
+  }
+  for (const key of ["changed_files", "module_paths", "dependencies"]) {
+    const value = root[key] !== undefined ? root[key] : task[key];
+    if (Array.isArray(value)) result[key] = value.filter((item) => typeof item === "string").map((item) => item.slice(0, 2048)).slice(0, 100);
   }
   const prompt = latestUserText(root);
   if (prompt !== "") result.prompt = prompt;
@@ -305,6 +338,45 @@ function latestAssistantText(agent) {
     return "";
   }
   return "";
+}
+
+export function detectPentestRequest(payload) {
+  const prompt = latestUserText(payload);
+  if (prompt === "") return null;
+  const normalized = normalizePrompt(prompt);
+  if (!/(^|\s)(pentest|penetration\s+test|security\s+test|kiem\s+thu\s+bao\s+mat|kiem\s+tra\s+bao\s+mat)(\s|$)/i.test(normalized)) return null;
+  const mode = /(^|\s|-)(deep|deep\s+scan|sau)(\s|$)/i.test(normalized) ? "deep" :
+    /(^|\s|-)(normal|standard|thuong)(\s|$)/i.test(normalized) ? "normal" : "";
+  return { mode, prompt };
+}
+
+export function createPentestDirective(payload) {
+  const request = detectPentestRequest(payload);
+  if (request === null) return "";
+  if (request.mode === "") {
+    return "[Baron pentest directive] The user requested a pentest but did not choose normal or deep. Ask which mode to run before starting; do not launch Strix from a lifecycle hook.";
+  }
+  return `[Baron pentest directive] The user explicitly requested a ${request.mode} pentest. Run baron pentest --${request.mode} now, read the canonical report, and remediate only through the active agent after Baron records the pre-fix checkpoint. Strix is report-only and must not modify the real source tree. Test and retest findings, report the result, and do not commit, push, deploy, or publish.`;
+}
+
+function addPentestDirective(decision, payload) {
+  const directive = createPentestDirective(payload);
+  if (directive === "" || !isRecord(decision) || decision.kind !== "enter" || !Array.isArray(decision.messages)) return decision;
+  if (decision.messages.some((message) => textFromContent(message?.content).includes("[Baron pentest directive]"))) return decision;
+  return { ...decision, messages: [...decision.messages, createPentestMessage(directive)] };
+}
+
+function createPentestMessage(text) {
+  return {
+    id: `baron-pentest-${randomUUID()}`,
+    role: "user",
+    source: { kind: "plugin", plugin: name, form: "pentest-directive", version: 1 },
+    content: [{ type: "text", text }],
+  };
+}
+
+function normalizePrompt(value) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[—–]/g, "-");
 }
 
 function latestUserText(payload) {

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/baron-shared-brain/baron/internal/testsupport"
 )
 
 func TestInstallEmbeddedCodexAdapterMaterializesPrivateBridge(t *testing.T) {
@@ -21,7 +23,7 @@ func TestInstallEmbeddedCodexAdapterMaterializesPrivateBridge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, marker := range []string{"baron hook codex", "SessionStart", "SessionEnd", "timeout", "task_id", "verification_kind"} {
+	for _, marker := range []string{"baron hook codex", "SessionStart", "SessionEnd", "timeout", "task_id", "verification_kind", "spawnBaron", "ComSpec"} {
 		if !strings.Contains(string(data), marker) {
 			t.Fatalf("Codex adapter missing protocol marker %q", marker)
 		}
@@ -32,6 +34,9 @@ func TestInstallEmbeddedCodexAdapterMaterializesPrivateBridge(t *testing.T) {
 	}
 	if !strings.Contains(string(manifest), `"@baron-nexus/codex-adapter"`) || !strings.Contains(string(manifest), `"version": "0.1.0"`) {
 		t.Fatalf("Codex adapter manifest is not pinned: %s", manifest)
+	}
+	if !testsupport.UnixModeBitsReliable() {
+		t.Skip("Windows ACLs do not expose Unix permission bits")
 	}
 	info, err := os.Stat(target)
 	if err != nil {
@@ -61,6 +66,9 @@ func TestInstallEmbeddedCodexAdapterRejectsUnsafeTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, link); err != nil {
+		if testsupport.IsSymlinkPrivilegeError(err) {
+			t.Skipf("symbolic link privilege is unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if err := InstallEmbeddedCodexAdapter(link); err == nil {

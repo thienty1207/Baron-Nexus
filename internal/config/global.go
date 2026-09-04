@@ -27,7 +27,22 @@ type GlobalState struct {
 	ProjectBindings     map[string]contracts.ProjectBinding `json:"project_bindings,omitempty"`
 	ProjectRoots        map[string]string                   `json:"project_roots,omitempty"`
 	Receipts            []string                            `json:"receipts,omitempty"`
+	ManagedRuntime      *ManagedRuntimeState                `json:"managed_runtime,omitempty"`
 	UpdatedAt           time.Time                           `json:"updated_at"`
+}
+
+// ManagedRuntimeState is additive state for the Baron-owned toolchain. It is
+// intentionally receipt/path metadata only; credentials remain in protected
+// files and are never serialized into global.json.
+type ManagedRuntimeState struct {
+	Root               string   `json:"root,omitempty"`
+	CurrentGeneration  string   `json:"current_generation,omitempty"`
+	PreviousGeneration string   `json:"previous_generation,omitempty"`
+	PlanID             string   `json:"plan_id,omitempty"`
+	Receipts           []string `json:"receipts,omitempty"`
+	LauncherDirectory  string   `json:"launcher_directory,omitempty"`
+	Launchers          []string `json:"launchers,omitempty"`
+	RestartRequired    bool     `json:"restart_required,omitempty"`
 }
 
 func DefaultGlobalStatePath() (string, error) {

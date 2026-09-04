@@ -16,6 +16,20 @@ type CommandRunner interface {
 	Run(context.Context, string, ...string) (string, error)
 }
 
+// EnvironmentCommandRunner is an optional hardening boundary for commands
+// that must not inherit the caller's complete environment. The map contains
+// only explicitly allowlisted values; implementations must not log it.
+type EnvironmentCommandRunner interface {
+	RunWithEnvironment(context.Context, map[string]string, string, ...string) (string, error)
+}
+
+// WorkingDirectoryEnvironmentCommandRunner extends the isolated environment
+// boundary with a private working directory for tools that emit artifacts
+// relative to their current directory, such as Strix.
+type WorkingDirectoryEnvironmentCommandRunner interface {
+	RunWithEnvironmentInDir(context.Context, map[string]string, string, string, ...string) (string, error)
+}
+
 const (
 	LatestDependencySelector    = "latest"
 	EmbeddedCodexAdapterVersion = "0.1.0"
@@ -285,9 +299,47 @@ func InstallCodex(ctx context.Context, runner CommandRunner, version string) err
 }
 
 func InstallCodexLatestWithReport(ctx context.Context, runner CommandRunner, reporters ...ProgressReporter) (DependencyReport, error) {
+	if runner == nil {
+		return DependencyReport{}, errors.New("Node/npm runner is not configured")
+	}
+	if _, err := runner.LookPath("npm"); err != nil {
+		// Native Codex installs (for example the Windows desktop/standalone
+		// install) do not necessarily ship with Node/npm. Hooks can still be
+		// repaired safely when the existing Codex binary identifies itself.
+		report, fallbackErr := ReuseInstalledCodex(ctx, runner)
+		if fallbackErr != nil {
+			return DependencyReport{}, errors.New("Node/npm is required to refresh Codex CLI to latest")
+		}
+		reportStep(firstProgressReporter(reporters...), fmt.Sprintf("Node/npm unavailable; keeping existing Codex %s and refreshing Baron hooks.", report.State.LocalVersion))
+		return report, nil
+	}
 	return EnsureNPMDependencyLatest(ctx, runner, NPMDependencySpec{
 		Name: "Codex", Package: "@openai/codex", Command: "codex",
 	}, reporters...)
+}
+
+// ReuseInstalledCodex verifies an already-installed Codex CLI without
+// requiring npm. It is used only for hook/adapter repair when refreshing the
+// npm package is unavailable.
+func ReuseInstalledCodex(ctx context.Context, runner CommandRunner) (DependencyReport, error) {
+	if runner == nil {
+		return DependencyReport{}, errors.New("Codex runner is not configured")
+	}
+	if _, err := runner.LookPath("codex"); err != nil {
+		return DependencyReport{}, errors.New("Codex CLI is not installed")
+	}
+	output, err := runner.Run(ctx, "codex", "--version")
+	if err != nil {
+		return DependencyReport{}, errors.New("verify installed Codex CLI")
+	}
+	version, err := NormalizeVersion(output)
+	if err != nil {
+		return DependencyReport{}, fmt.Errorf("verify installed Codex CLI: %w", err)
+	}
+	return DependencyReport{
+		State:  ComponentState{Name: "Codex", Installed: true, LocalVersion: version},
+		Source: "existing:codex",
+	}, nil
 }
 
 // InstallCodexWithSource verifies or installs the selected Codex CLI release and

@@ -6,9 +6,8 @@ old='Baron'" "'Shared Brain'
 found=0
 
 while IFS= read -r line; do
-  path=${line%%:*}
-  case "$path" in
-    IMPLEMENT.pdf|*'/Baron-Nexus Implement Roadmap.md')
+  case "$line" in
+    *"Baron-Nexus Implement Roadmap.md:"*)
       continue
       ;;
   esac

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/baron-shared-brain/baron/internal/testsupport"
 )
 
 func TestResolveTencentRuntimeConfigUsesProviderEnvironmentWithoutLoggingValues(t *testing.T) {
@@ -100,6 +102,9 @@ func TestResolveTencentRuntimeConfigWithSourcesKeepsCustomProviderValues(t *test
 }
 
 func TestEnsureTencentRuntimeEnvPreservesConfiguredValuesAndFillsManagedValues(t *testing.T) {
+	if !testsupport.UnixModeBitsReliable() {
+		t.Skip("Windows ACLs do not expose Unix permission bits")
+	}
 	root := t.TempDir()
 	deployDir := filepath.Join(root, "deploy", "global-images")
 	if err := os.MkdirAll(deployDir, 0o700); err != nil {
@@ -154,6 +159,9 @@ func TestEnsureTencentRuntimeEnvReportsMissingNamesWithoutSecretValues(t *testin
 }
 
 func TestReplaceTencentRuntimeAPIKeyPreservesUnrelatedValuesAndCreatesBackup(t *testing.T) {
+	if !testsupport.UnixModeBitsReliable() {
+		t.Skip("Windows ACLs do not expose Unix permission bits")
+	}
 	root := t.TempDir()
 	envPath := filepath.Join(root, ".env")
 	old := "MEMORY_LLM_API_KEY='old-key'\nPROXY_UPSTREAM_API_KEY='old-key'\nCUSTOM_VALUE=keep\n"

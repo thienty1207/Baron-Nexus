@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -87,7 +88,64 @@ type OSProbe struct{}
 
 func (OSProbe) LookPath(name string) (string, error) { return exec.LookPath(name) }
 func (OSProbe) Run(ctx context.Context, name string, args ...string) (string, error) {
-	return stringOutput(exec.CommandContext(ctx, name, args...))
+	return stringOutput(newOSCommand(ctx, name, args...))
+}
+
+// RunWithEnvironment executes a child with an explicit environment instead of
+// inheriting provider keys and unrelated application settings from the shell.
+func (OSProbe) RunWithEnvironment(ctx context.Context, environment map[string]string, name string, args ...string) (string, error) {
+	return runWithIsolatedEnvironment(ctx, "", environment, name, args...)
+}
+
+// RunWithEnvironmentInDir is the artifact-safe variant used by Strix. Its
+// working directory is job-owned, so relative Strix output cannot land in the
+// user's source tree.
+func (OSProbe) RunWithEnvironmentInDir(ctx context.Context, environment map[string]string, dir, name string, args ...string) (string, error) {
+	return runWithIsolatedEnvironment(ctx, dir, environment, name, args...)
+}
+
+func runWithIsolatedEnvironment(ctx context.Context, dir string, environment map[string]string, name string, args ...string) (string, error) {
+	command := newOSCommand(ctx, name, args...)
+	if strings.TrimSpace(dir) != "" {
+		command.Dir = dir
+	}
+	command.Env = safeProcessEnvironment(environment)
+	return stringOutput(command)
+}
+
+func newOSCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	if runtime.GOOS == "windows" && (strings.HasSuffix(strings.ToLower(name), ".cmd") || strings.HasSuffix(strings.ToLower(name), ".bat")) {
+		return exec.CommandContext(ctx, "cmd.exe", append([]string{"/d", "/c", name}, args...)...)
+	}
+	return exec.CommandContext(ctx, name, args...)
+}
+
+// safeProcessEnvironment preserves only values needed to launch a managed
+// executable. In particular, it deliberately excludes all inherited API-key,
+// token, proxy-credential, and provider configuration variables.
+func safeProcessEnvironment(overrides map[string]string) []string {
+	allowed := []string{
+		"PATH", "HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "TEMP", "TMP",
+		"TMPDIR", "SystemRoot", "WINDIR", "USER", "USERNAME", "LOGNAME", "LANG", "LC_ALL", "TZ",
+	}
+	result := make([]string, 0, len(allowed)+len(overrides))
+	for _, key := range allowed {
+		if value, ok := os.LookupEnv(key); ok {
+			result = append(result, key+"="+value)
+		}
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`).MatchString(key) || strings.ContainsAny(overrides[key], "\x00\r\n") {
+			continue
+		}
+		result = append(result, key+"="+overrides[key])
+	}
+	return result
 }
 
 // RunInteractive is used only for safe OS authentication preflights such as
@@ -104,25 +162,26 @@ func (OSProbe) RunInteractive(ctx context.Context, name string, args ...string) 
 }
 
 type Options struct {
-	Probe               CommandProbe
-	DSHComponents       map[string]bool
-	DSHProviderChecked  bool
-	DSHProviderReady    bool
-	DSHProviderStatus   Status
-	DSHProviderMessage  string
-	DSHProviderSuggest  string
-	CodexAuthenticated  bool
-	CodexProjectTrusted bool
-	TencentReady        bool
-	TencentEndpoint     string
-	HubEndpoint         string
-	KnowledgeEndpoint   string
-	ProxyEndpoint       string
-	CredentialPaths     []string
-	CodexHooksPath      string
-	SurfaceChecks       []CheckResult
-	HTTPClient          *http.Client
-	LinuxBootstrap      bool
+	Probe                CommandProbe
+	DSHComponents        map[string]bool
+	DSHProviderChecked   bool
+	DSHProviderReady     bool
+	DSHProviderStatus    Status
+	DSHProviderMessage   string
+	DSHProviderSuggest   string
+	CodexAuthenticated   bool
+	CodexProjectTrusted  bool
+	CodexHooksUserScoped bool
+	TencentReady         bool
+	TencentEndpoint      string
+	HubEndpoint          string
+	KnowledgeEndpoint    string
+	ProxyEndpoint        string
+	CredentialPaths      []string
+	CodexHooksPath       string
+	SurfaceChecks        []CheckResult
+	HTTPClient           *http.Client
+	LinuxBootstrap       bool
 }
 
 func Check(ctx context.Context, options Options) Report {
@@ -241,6 +300,8 @@ func Check(ctx context.Context, options Options) Report {
 				add(CheckResult{Name: "codex-hooks", Status: StatusIncomplete, Message: "Baron Codex hook configuration is incomplete.", Suggestion: "baron codex-cli init"})
 			case options.CodexProjectTrusted:
 				add(CheckResult{Name: "codex-hooks", Status: StatusReady, Message: "Baron Codex hooks are configured and this project is trusted by Codex."})
+			case options.CodexHooksUserScoped:
+				add(CheckResult{Name: "codex-hooks", Status: StatusReady, Message: "Baron user-level Codex hooks are configured; project trust is not required."})
 			default:
 				add(CheckResult{Name: "codex-hooks", Status: StatusWarning, Message: "Baron Codex hooks are configured, but interactive project trust/enablement cannot be proved from hooks.json alone.", Suggestion: install.CodexHookApprovalInstruction})
 			}

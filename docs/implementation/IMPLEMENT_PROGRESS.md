@@ -7,6 +7,69 @@ its mandatory tests have fresh, recorded evidence. External release-gate cases
 that require Docker, credentials, or interactive login are marked BLOCKED with
 the exact dependency; they are not converted to PASS by mocks.
 
+## Managed runtime continuation - 2026-09-04
+
+The approved `v0.1.22` managed-runtime and Strix implementation is being
+validated separately from the historical phase ledger below. Local contracts
+now cover immutable bundle plans, archive/npm/uv-tool staging, exact platform
+assets, generation receipts, executable probes, report-only Strix execution,
+credential fan-out, and legacy compatibility fixtures. The repository now
+contains a real hash-pinned catalog with ten required components and verified
+Linux amd64 and Windows amd64 assets. The stable release remains BLOCKED until
+the external P19/P22/P27 acceptance matrix is completed; no mock catalog hash
+or URL is counted as release evidence.
+
+## Latest local verification - 2026-09-04
+
+- Source and embedded DSH/Codex adapter parity now has executable contract
+  coverage for all seven canonical `task_*` events, task identifiers,
+  verification fields, and bounded changed-file evidence. The Git Bash host
+  lacks `node`; both adapter test scripts pass through the real Ubuntu WSL
+  runtime at `/usr/bin/node`.
+- Fresh `go test ./... -count=1`, `go vet ./...`, `gofmt -l .`, and
+  `git diff --check` pass.
+- `configs/managed-runtime-catalog.json` validates with ten releases and ten
+  required components. The opt-in real-catalog acceptance stages the complete
+  Windows amd64 bundle, verifies receipts and launchers, and passes.
+- The PNPM installer uses a hoisted managed layout, avoiding the Windows
+  MAX_PATH failure previously reproduced while staging the Codex optional
+  package. The generated Codex and DSH launchers probe successfully.
+- Legacy upgrade compatibility, installer preflight, platform guidance,
+  branding, source/embedded adapter checks, and cross-platform release builds
+  pass. The release gate remains BLOCKED because roadmap phases P19, P22, and
+  P27 still contain unchecked external acceptance items.
+- The candidate source is ready for publication after this verification pass.
+  Clean Ubuntu/WSL, Tencent, DSH/Codex, and live Strix acceptance remain
+  external evidence requirements.
+- Windows Strix execution now fails closed before native receipt use; only a
+  verified Ubuntu WSL2 + Docker bridge may satisfy that platform boundary.
+- Pentest hardening tests cover exact loopback host parsing and refuse snapshot
+  cleanup outside the OS temp root, including lookalike snapshot names.
+- SARIF reports are converted into canonical Strix findings instead of being
+  silently treated as an empty result. Artifact paths, report symlinks, and
+  unmanaged local snapshot roots are rejected outside the job-owned boundary.
+- Job workspace roots now reject symlink escapes, artifact hashing rejects
+  content that grows past its bounded limit, and Windows Docker preflight
+  verifies Docker Desktop or a verified Ubuntu WSL2 Docker engine without
+  requiring sudo or mutating Windows UI state.
+- Hook execution now has a provider-safe deadline, and context-aware SQLite
+  initialization prevents migration/lock waits from exceeding that budget.
+- Platform tests inject the target OS/architecture, so Windows bridge checks
+  are exercised on Linux CI without making Linux production detection lie.
+- The complete race suite passes in the official `golang:1.27-bookworm`
+  container with GCC; the native Windows host attempt remains BLOCKED only
+  because its toolchain has no `gcc`/cgo compiler.
+- Ubuntu WSL2 Docker was used for that race run and the adapter checks; this is
+  test evidence only, not the production Windows Strix bridge.
+- Native Windows Strix execution remains fail-closed. A verified Ubuntu WSL2
+  + Docker bridge is required before Windows can advertise Strix execution.
+- `baron pentest stop` currently records the job as stopped in SQLite; it does
+  not yet claim to terminate an already-running external Strix process or
+  container. That process-lifecycle acceptance remains open.
+- Shell scripts are now pinned to LF through `.gitattributes`; the release gate
+  also accepts CRLF acceptance reports, and the Git Bash syntax/release harness
+  rerun passes across the repository.
+
 ## Baseline
 
 - Starting repository: fresh directory containing `IMPLEMENT.pdf`; no Git metadata or source tree existed.

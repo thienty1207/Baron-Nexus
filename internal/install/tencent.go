@@ -373,7 +373,14 @@ func TencentAdminKey(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return "", errors.New("Tencent deployment admin key has weak permissions")
+	}
+	private, err := config.IsPrivateFile(path)
+	if err != nil {
+		return "", errors.New("Tencent deployment admin key permissions could not be verified")
+	}
+	if !private {
 		return "", errors.New("Tencent deployment admin key has weak permissions")
 	}
 	data, err := os.ReadFile(path)

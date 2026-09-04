@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/baron-shared-brain/baron/internal/testsupport"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,6 +29,9 @@ func TestReadDSHProviderKeyPrefersLaunchingEnvironment(t *testing.T) {
 }
 
 func TestEnsureDSHProviderKeyPreservesOtherRefsAndUsesPrivateAtomicFile(t *testing.T) {
+	if !testsupport.UnixModeBitsReliable() {
+		t.Skip("Windows ACLs do not expose Unix permission bits")
+	}
 	home := t.TempDir()
 	path := filepath.Join(home, ".credentials.yaml")
 	original := "# user-owned comment\nversion: 1\nrefs:\n  OPENAI_API_KEY: keep-me\n  DEEPSEEK_API_KEY: old-key\n"
@@ -99,6 +103,9 @@ func TestEnsureDSHProviderKeyRejectsSymlink(t *testing.T) {
 	}
 	path := filepath.Join(home, ".credentials.yaml")
 	if err := os.Symlink(target, path); err != nil {
+		if testsupport.IsSymlinkPrivilegeError(err) {
+			t.Skipf("symbolic link privilege is unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if err := EnsureDSHProviderKey(map[string]string{"DSH_HOME": home}, "refuse-key"); err == nil {

@@ -20,6 +20,13 @@ case "$output" in
     exit 1
     ;;
 esac
+case "$output" in
+  *P15-CATALOG:*)
+    printf '%s\n' "$output" >&2
+    printf '%s\n' "catalog validation unexpectedly remained blocked" >&2
+    exit 1
+    ;;
+esac
 after=$(cksum "$ROOT/Baron-Nexus Implement Roadmap.md" "$ROOT/docs/implementation/FINAL_ACCEPTANCE_REPORT.md")
 if [ "$before" != "$after" ]; then
   printf '%s\n' "release gate mutated roadmap/report" >&2

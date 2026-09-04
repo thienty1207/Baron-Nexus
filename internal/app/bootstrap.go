@@ -112,8 +112,8 @@ func (a *App) installAndBootstrap(ctx context.Context, reporter install.Progress
 	reportProgressStep(reporter, "Starting Baron install; dependency setup may take several minutes.")
 	// Host authorization and dependency work must precede the release download
 	// as well as the DSH/Tencent downloads. The first-run coordinator is the
-	// only path that owns this ordering; individual `baron update` remains a
-	// binary-only operation.
+	// only path that owns this ordering; the managed bundle coordinator is the
+	// authoritative path when it is available.
 	if err := a.preflightBootstrap(ctx, reporter); err != nil {
 		return "", err
 	}

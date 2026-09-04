@@ -1,0 +1,258 @@
+{
+  "schema_version": 1,
+  "catalog_version": "0.1.22",
+  "generated_at": "2026-09-04T00:00:00Z",
+  "releases": [
+    {
+      "component": "uv",
+      "version": "0.12.9",
+      "stable": true,
+      "install_method": "archive",
+      "entry_point": "uv",
+      "assets": [
+        {
+          "name": "uv-x86_64-unknown-linux-gnu.tar.gz",
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-x86_64-unknown-linux-gnu.tar.gz",
+          "sha256": "ec7a99cd05e0cd7f80243f135ce1361c76835cb0ee60055d14d20eba8eba1460",
+          "platform": "linux",
+          "architecture": "amd64"
+        },
+        {
+          "name": "uv-x86_64-pc-windows-msvc.zip",
+          "url": "https://github.com/astral-sh/uv/releases/download/0.12.9/uv-x86_64-pc-windows-msvc.zip",
+          "sha256": "ddbfcee1ac615a0499f6aa97b5ec8ebdf3ee4a7714a48055ec2ba0030e3cf810",
+          "platform": "windows",
+          "architecture": "amd64"
+        }
+      ]
+    },
+    {
+      "component": "python",
+      "version": "3.14.7",
+      "stable": true,
+      "install_method": "archive",
+      "entry_point": "python",
+      "assets": [
+        {
+          "name": "cpython-3.14.7+20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.14.7%2B20260901-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+          "sha256": "3959f92825141e04adf44982d3a83ee57af0877e893b0796e04c1468749d9b04",
+          "platform": "linux",
+          "architecture": "amd64",
+          "size": 35945651
+        },
+        {
+          "name": "cpython-3.14.7+20260901-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+          "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260901/cpython-3.14.7%2B20260901-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+          "sha256": "ca3c33ca924dfcab3b74205a7a58a88b0255135c53f95497b26b5e60700fd66d",
+          "platform": "windows",
+          "architecture": "amd64",
+          "size": 22783936
+        }
+      ]
+    },
+    {
+      "component": "strix",
+      "version": "1.6.1",
+      "stable": true,
+      "requires_python": ">=3.12,<3.15",
+      "install_method": "uv-tool",
+      "package": "strix-agent",
+      "entry_point": "strix",
+      "assets": [
+        {
+          "name": "strix_agent-1.6.1-py3-none-manylinux_2_17_x86_64.whl",
+          "url": "https://files.pythonhosted.org/packages/4e/e6/0b7ca3b9e797d218af3df3d9efcc35c1b13099151c0ea1e9890f6eaae87f/strix_agent-1.6.1-py3-none-manylinux_2_17_x86_64.whl",
+          "sha256": "d4d1171dc271e4215226120097a8ab7f92d70c98093c0e085c6609e1b0c4036e",
+          "platform": "linux",
+          "architecture": "amd64",
+          "size": 4238598
+        },
+        {
+          "name": "strix_agent-1.6.1-py3-none-win_amd64.whl",
+          "url": "https://files.pythonhosted.org/packages/83/e3/d9b93dbb265677d6e0f79e9bd32509f0e37690e139940ecca2569debfdf4/strix_agent-1.6.1-py3-none-win_amd64.whl",
+          "sha256": "7a80c2f80f191862b8ff3986b48dc5ee6422cbd08eb4b863538da5c2c26f598d",
+          "platform": "windows",
+          "architecture": "amd64",
+          "size": 4274259
+        }
+      ]
+    },
+    {
+      "component": "bun",
+      "version": "1.4.0",
+      "stable": true,
+      "install_method": "archive",
+      "entry_point": "bun",
+      "assets": [
+        {
+          "name": "bun-linux-x64.zip",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/bun-linux-x64.zip",
+          "sha256": "2d03fb5fb83ac8b567aca0a281b2ce1a1a19d488f56c2968d88c3f25e92fe452",
+          "platform": "linux",
+          "architecture": "amd64"
+        },
+        {
+          "name": "bun-windows-x64.zip",
+          "url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.0/bun-windows-x64.zip",
+          "sha256": "e6f093d39da486b20262ca8cdd5ed6a9e8bc9c2f275b78e6d3a0c5b28cc95901",
+          "platform": "windows",
+          "architecture": "amd64"
+        }
+      ]
+    },
+    {
+      "component": "go",
+      "version": "1.27.1",
+      "stable": true,
+      "install_method": "archive",
+      "entry_point": "go",
+      "assets": [
+        {
+          "name": "go1.27.1.linux-amd64.tar.gz",
+          "url": "https://go.dev/dl/go1.27.1.linux-amd64.tar.gz",
+          "sha256": "63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445",
+          "platform": "linux",
+          "architecture": "amd64",
+          "size": 70553950
+        },
+        {
+          "name": "go1.27.1.windows-amd64.zip",
+          "url": "https://go.dev/dl/go1.27.1.windows-amd64.zip",
+          "sha256": "a3911b5e0e1b1053f25ed0675f4c1c6aad1e2bfcf253df2b9be4caabd2edd95d",
+          "platform": "windows",
+          "architecture": "amd64",
+          "size": 78931360
+        }
+      ]
+    },
+    {
+      "component": "node",
+      "version": "24.20.0",
+      "stable": true,
+      "install_method": "archive",
+      "entry_point": "node",
+      "assets": [
+        {
+          "name": "node-v24.20.0-linux-x64.tar.gz",
+          "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-linux-x64.tar.gz",
+          "sha256": "855d581f8a4eb1a8117e3426de25fe02770592febcfb31369aee1ffbfee9e8ec",
+          "platform": "linux",
+          "architecture": "amd64"
+        },
+        {
+          "name": "node-v24.20.0-win-x64.zip",
+          "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-win-x64.zip",
+          "sha256": "6cac9ffbca8f6a47091e4b5c772e0606049c3871cb67d900c0cedde630e545ba",
+          "platform": "windows",
+          "architecture": "amd64",
+          "size": 37539751
+        }
+      ]
+    },
+    {
+      "component": "npm",
+      "version": "12.0.2",
+      "stable": true,
+      "install_method": "archive",
+      "entry_point": "npm",
+      "assets": [
+        {
+          "name": "npm-12.0.2.tgz",
+          "url": "https://registry.npmjs.org/npm/-/npm-12.0.2.tgz",
+          "sha256": "5dbb86c71d07a1957f2e90734092dd6a58bdcd9ebc2d8d41ca1c6e6a21d364e1",
+          "platform": "linux",
+          "architecture": "amd64",
+          "size": 3045132
+        },
+        {
+          "name": "npm-12.0.2.tgz",
+          "url": "https://registry.npmjs.org/npm/-/npm-12.0.2.tgz",
+          "sha256": "5dbb86c71d07a1957f2e90734092dd6a58bdcd9ebc2d8d41ca1c6e6a21d364e1",
+          "platform": "windows",
+          "architecture": "amd64",
+          "size": 3045132
+        }
+      ]
+    },
+    {
+      "component": "pnpm",
+      "version": "11.25.0",
+      "stable": true,
+      "install_method": "archive",
+      "package": "pnpm",
+      "entry_point": "pnpm",
+      "assets": [
+        {
+          "name": "pnpm-11.25.0.tgz",
+          "url": "https://registry.npmjs.org/pnpm/-/pnpm-11.25.0.tgz",
+          "sha256": "33dd0748f27e7916c4f1c8b6943461983e3453b06bbda6312a6280130b4881e5",
+          "platform": "linux",
+          "architecture": "amd64",
+          "size": 5116259
+        },
+        {
+          "name": "pnpm-11.25.0.tgz",
+          "url": "https://registry.npmjs.org/pnpm/-/pnpm-11.25.0.tgz",
+          "sha256": "33dd0748f27e7916c4f1c8b6943461983e3453b06bbda6312a6280130b4881e5",
+          "platform": "windows",
+          "architecture": "amd64",
+          "size": 5116259
+        }
+      ]
+    },
+    {
+      "component": "dsh",
+      "version": "0.1.1-rc.2",
+      "stable": true,
+      "verified_prerelease": true,
+      "install_method": "pnpm",
+      "package": "@deepseek-ai/dsh",
+      "entry_point": "dsh",
+      "assets": [
+        {
+          "name": "dsh-0.1.1-rc.2.tgz",
+          "url": "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.1-rc.2.tgz",
+          "sha256": "47ec05f45ada5ab87779ae18a90456b5ebff5421dc0ff5c179677d65e1c16057",
+          "platform": "linux",
+          "architecture": "amd64",
+          "size": 33675
+        },
+        {
+          "name": "dsh-0.1.1-rc.2.tgz",
+          "url": "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.1-rc.2.tgz",
+          "sha256": "47ec05f45ada5ab87779ae18a90456b5ebff5421dc0ff5c179677d65e1c16057",
+          "platform": "windows",
+          "architecture": "amd64",
+          "size": 33675
+        }
+      ]
+    },
+    {
+      "component": "codex",
+      "version": "0.153.2",
+      "stable": true,
+      "install_method": "pnpm",
+      "package": "@openai/codex",
+      "entry_point": "codex",
+      "assets": [
+        {
+          "name": "codex-0.153.2.tgz",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.153.2.tgz",
+          "sha256": "afa72740e87733d1378a38faf30b2643c35d1cda0ddc99be2cc98a6b39c5f5fc",
+          "platform": "linux",
+          "architecture": "amd64",
+          "size": 4904
+        },
+        {
+          "name": "codex-0.153.2.tgz",
+          "url": "https://registry.npmjs.org/@openai/codex/-/codex-0.153.2.tgz",
+          "sha256": "afa72740e87733d1378a38faf30b2643c35d1cda0ddc99be2cc98a6b39c5f5fc",
+          "platform": "windows",
+          "architecture": "amd64",
+          "size": 4904
+        }
+      ]
+    }
+  ]
+}

@@ -26,7 +26,9 @@ import (
 	"github.com/baron-shared-brain/baron/internal/hooks"
 	"github.com/baron-shared-brain/baron/internal/install"
 	"github.com/baron-shared-brain/baron/internal/knowledge"
+	"github.com/baron-shared-brain/baron/internal/managedruntime"
 	"github.com/baron-shared-brain/baron/internal/memory/tencent"
+	"github.com/baron-shared-brain/baron/internal/pentest"
 	"github.com/baron-shared-brain/baron/internal/permissions"
 	"github.com/baron-shared-brain/baron/internal/project"
 	"github.com/baron-shared-brain/baron/internal/release"
@@ -54,6 +56,18 @@ type App struct {
 	ValidateProviderCredential func(context.Context, string, string) error
 	ReleaseClient              *release.Client
 	ExecutablePath             string
+	// ManagedRuntimePlanResolver and ManagedRuntimeManager are injectable so
+	// install/update can resolve and activate one immutable bundle plan without
+	// coupling App to a particular metadata transport.
+	ManagedRuntimeCatalogURL   string
+	ManagedRuntimePlanResolver func(context.Context, install.ProgressReporter) (managedruntime.ResolutionPlan, error)
+	ManagedRuntimeManager      *managedruntime.Manager
+	managedRuntimeDefault      bool
+	// PentestOrchestratorFactory is injectable so tests and supported adapters
+	// can bind the active Codex/DSH remediation boundary without spawning a
+	// second agent.
+	PentestOrchestratorFactory func(context.Context, pentest.Request, project.Project, *pentest.Store) (pentest.Orchestrator, error)
+	PentestAgentFactory        func(context.Context, contracts.HookClient, project.Project) (pentest.ActiveAgent, error)
 }
 
 func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
@@ -90,10 +104,13 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 			return classifyError(a.restoreWithOptions(context.Background(), archive, replaceExisting))
 		},
 		Install: func() (string, error) {
-			message, err := a.installAndBootstrap(context.Background(), progress)
+			message, err := a.installFullBundle(context.Background(), progress)
 			return message, classifyError(err)
 		},
-		Update:         func() (string, error) { return a.installBaronBinary(false, progress) },
+		Update: func() (string, error) {
+			message, err := a.updateFullBundle(context.Background(), progress)
+			return message, classifyError(err)
+		},
 		RunWithLoading: runWithLoading,
 		PermissionsEnable: func() (string, error) {
 			return a.enablePermissions()
@@ -111,6 +128,28 @@ func (a *App) CLIOptions(out, errOut io.Writer) cli.Options {
 			return a.uninstall(purgeShared)
 		},
 		SetCredential: func(provider string) error { return classifyError(a.SetCredential(provider)) },
+		Pentest: func(request pentest.Request) (string, error) {
+			request.Client = pentestClientFromEnvironment(processEnvironment())
+			report, err := a.runPentest(context.Background(), request, progress)
+			if err != nil {
+				return "", classifyError(err)
+			}
+			return pentestSummary(report), nil
+		},
+		PentestStatus: func(jobID string, jsonOutput bool) (string, error) {
+			data, err := a.pentestReportBytes(context.Background(), jobID, jsonOutput)
+			return string(data), classifyError(err)
+		},
+		PentestReport: func(jobID string, jsonOutput bool) (string, error) {
+			data, err := a.pentestReportBytes(context.Background(), jobID, jsonOutput)
+			return string(data), classifyError(err)
+		},
+		PentestStop: func(jobID string) (string, error) {
+			if err := a.stopPentest(context.Background(), jobID); err != nil {
+				return "", classifyError(err)
+			}
+			return "Pentest stop requested for " + strings.TrimSpace(jobID) + ".", nil
+		},
 		Hook: func(client, event string, input io.Reader, output io.Writer) error {
 			return a.HandleHook(context.Background(), client, event, "", input, output)
 		},
@@ -131,6 +170,19 @@ const (
 )
 
 const releaseDownloadTimeout = 2 * time.Minute
+
+// Codex commonly gives lifecycle hooks roughly three seconds. Keep Baron
+// below that provider budget so a contended SQLite lock or slow local Git
+// probe fails open with a valid response instead of surfacing as a provider
+// timeout. Remote work already has smaller child budgets inside hooks.Handle.
+const hookExecutionBudget = 2400 * time.Millisecond
+
+func hookExecutionContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, hookExecutionBudget)
+}
 
 func releaseHTTPClient(base *http.Client) *http.Client {
 	if base == nil {
@@ -247,6 +299,7 @@ func (a *App) readinessReport() (doctor.Report, error) {
 		projectRoot = resolved.Root
 	}
 	surfaceChecks := a.knowledgeSurfaceChecks(context.Background(), global)
+	surfaceChecks = append(surfaceChecks, a.managedRuntimeReadiness(context.Background())...)
 	dshKey, dshKeyErr := install.ReadDSHProviderKey(processEnvironment())
 	dshStatus := doctor.StatusIncomplete
 	dshMessage := "DSH provider credential is not configured."
@@ -271,30 +324,33 @@ func (a *App) readinessReport() (doctor.Report, error) {
 		surfaceChecks = append(surfaceChecks, *check)
 	}
 	codexHooksPath := global.CodexHooksPath
+	codexHooksUserScoped := false
 	if canonicalPath, pathErr := install.CodexHooksPath(); pathErr == nil {
 		// CODEX_HOME/~/.codex is authoritative for Codex hooks. A path saved
 		// by an older Baron release under ~/.config/codex must not make the
 		// readiness report claim that live Codex hooks are installed.
 		codexHooksPath = canonicalPath
+		codexHooksUserScoped = true
 	}
 	return doctor.Check(context.Background(), doctor.Options{
-		DSHComponents:       global.DSHComponents,
-		DSHProviderChecked:  true,
-		DSHProviderReady:    dshStatus == doctor.StatusReady,
-		DSHProviderStatus:   dshStatus,
-		DSHProviderMessage:  dshMessage,
-		DSHProviderSuggest:  dshSuggestion,
-		CodexAuthenticated:  codexAuthReady(),
-		CodexProjectTrusted: install.CodexProjectTrusted(projectRoot),
-		TencentEndpoint:     global.Identity.Endpoint,
-		HubEndpoint:         global.Identity.HubEndpoint,
-		KnowledgeEndpoint:   global.Identity.KnowledgeEndpoint,
-		ProxyEndpoint:       os.Getenv("BARON_TENCENT_PROXY_ENDPOINT"),
-		CredentialPaths:     credentialPaths,
-		CodexHooksPath:      codexHooksPath,
-		SurfaceChecks:       surfaceChecks,
-		HTTPClient:          a.HTTPClient,
-		LinuxBootstrap:      runtime.GOOS == "linux",
+		DSHComponents:        global.DSHComponents,
+		DSHProviderChecked:   true,
+		DSHProviderReady:     dshStatus == doctor.StatusReady,
+		DSHProviderStatus:    dshStatus,
+		DSHProviderMessage:   dshMessage,
+		DSHProviderSuggest:   dshSuggestion,
+		CodexAuthenticated:   codexAuthReady(),
+		CodexProjectTrusted:  install.CodexProjectTrusted(projectRoot),
+		CodexHooksUserScoped: codexHooksUserScoped,
+		TencentEndpoint:      global.Identity.Endpoint,
+		HubEndpoint:          global.Identity.HubEndpoint,
+		KnowledgeEndpoint:    global.Identity.KnowledgeEndpoint,
+		ProxyEndpoint:        os.Getenv("BARON_TENCENT_PROXY_ENDPOINT"),
+		CredentialPaths:      credentialPaths,
+		CodexHooksPath:       codexHooksPath,
+		SurfaceChecks:        surfaceChecks,
+		HTTPClient:           a.HTTPClient,
+		LinuxBootstrap:       runtime.GOOS == "linux",
 	}), nil
 }
 
@@ -790,7 +846,7 @@ func (a *App) Repair() error {
 		codexHooksPath = canonicalPath
 	}
 	if codexHooksPath != "" {
-		if err := install.MergeCodexHooks(codexHooksPath, "baron"); err != nil {
+		if err := install.MergeCodexHooks(codexHooksPath, baronHookCommand()); err != nil {
 			return err
 		}
 	}
@@ -922,10 +978,14 @@ func New() *App {
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 	transport.MaxIdleConns = 16
 	transport.MaxIdleConnsPerHost = 8
-	return &App{HTTPClient: &http.Client{
+	application := &App{HTTPClient: &http.Client{
 		Timeout:   3 * time.Second,
 		Transport: transport,
 	}, CommandRunner: doctor.OSProbe{}}
+	if err := application.configureDefaultManagedRuntimeCoordinator(); err == nil {
+		application.managedRuntimeDefault = true
+	}
+	return application
 }
 
 func (a *App) commandRunner() install.CommandRunner {
@@ -1130,17 +1190,6 @@ func (a *App) uninstallOptions(purgeShared bool) (baronuninstall.Options, error)
 			return baronuninstall.Options{}, err
 		}
 	}
-	homeDir := ""
-	sourceCheckouts := []string(nil)
-	environmentFiles := []string(nil)
-	if purgeShared {
-		homeDir, err = os.UserHomeDir()
-		if err != nil {
-			return baronuninstall.Options{}, fmt.Errorf("resolve user home for full uninstall: %w", err)
-		}
-		sourceCheckouts = baronuninstall.DiscoverBaronSourceCheckouts(homeDir)
-		environmentFiles = baronuninstall.DefaultEnvironmentFiles(homeDir)
-	}
 	return baronuninstall.Options{
 		GlobalPath:           globalPath,
 		DSHConfigPath:        global.DSHConfigPath,
@@ -1157,9 +1206,7 @@ func (a *App) uninstallOptions(purgeShared bool) (baronuninstall.Options, error)
 		ExecutablePath:       executablePath,
 		PurgeShared:          purgeShared,
 		PurgeAll:             purgeShared,
-		HomeDir:              homeDir,
-		SourceCheckouts:      sourceCheckouts,
-		EnvironmentFiles:     environmentFiles,
+		ManagedRuntime:       global.ManagedRuntime,
 		GOOS:                 runtime.GOOS,
 		Runner:               a.commandRunner(),
 	}, nil
@@ -1261,6 +1308,8 @@ func (a *App) SetupProject(ctx context.Context, path string) (project.Project, e
 }
 
 func (a *App) HandleHook(ctx context.Context, clientName, eventName, root string, input io.Reader, output io.Writer) error {
+	ctx, cancel := hookExecutionContext(ctx)
+	defer cancel()
 	if root == "" {
 		var err error
 		root, err = os.Getwd()
@@ -1275,7 +1324,7 @@ func (a *App) HandleHook(ctx context.Context, clientName, eventName, root string
 	if err := a.validateProjectBinding(resolved); err != nil {
 		return writeHookFailureForClient(output, clientName, eventName, err)
 	}
-	store, err := storage.Open(filepath.Join(resolved.Root, ".baron", "runtime", "state.db"))
+	store, err := storage.OpenWithContext(ctx, filepath.Join(resolved.Root, ".baron", "runtime", "state.db"))
 	if err != nil {
 		return writeHookFailureForClient(output, clientName, eventName, err)
 	}
@@ -1550,10 +1599,13 @@ func (a *App) dshInitWithPlan(ctx context.Context, plan BootstrapPlan, reporter 
 	if err != nil {
 		return err
 	}
+	runner, err := a.commandRunnerForGlobal(global)
+	if err != nil {
+		return err
+	}
 	if dshHome, homeErr := install.DSHHome(processEnvironment()); homeErr == nil {
 		global.DSHHomePath = dshHome
 	}
-	runner := a.commandRunner()
 	dshDependency := install.DependencyReport{}
 	if state, ok := plan.State("dsh"); ok {
 		dshDependency, err = install.EnsureNPMDependencyState(ctx, runner, install.NPMDependencySpec{Name: "DSH", Package: "@deepseek-ai/dsh", Command: "dsh"}, state, reporter)
@@ -1640,9 +1692,16 @@ func (a *App) CodexInit() error {
 }
 
 func (a *App) codexInitWithPlan(ctx context.Context, plan BootstrapPlan, reporter install.ProgressReporter) error {
-	runner := a.commandRunner()
 	var err error
 	codexDependency := install.DependencyReport{}
+	global, path, err := a.loadGlobal()
+	if err != nil {
+		return err
+	}
+	runner, err := a.commandRunnerForGlobal(global)
+	if err != nil {
+		return err
+	}
 	if state, ok := plan.State("codex"); ok {
 		codexDependency, err = install.EnsureNPMDependencyState(ctx, runner, install.NPMDependencySpec{Name: "Codex", Package: "@openai/codex", Command: "codex"}, state, reporter)
 	} else {
@@ -1652,10 +1711,6 @@ func (a *App) codexInitWithPlan(ctx context.Context, plan BootstrapPlan, reporte
 		return err
 	}
 	codexSource, codexVersion := codexDependency.Source, codexDependency.State.LocalVersion
-	global, path, err := a.loadGlobal()
-	if err != nil {
-		return err
-	}
 	codexHome, err := install.CodexHome()
 	if err != nil {
 		return err
@@ -1853,6 +1908,9 @@ func (a *App) resolveDSHCredential() (string, error) {
 	}
 	if key != "" {
 		if err := a.validateProviderCredential(context.Background(), dshProviderBaseURL(values), key); err == nil {
+			if err := a.persistResolvedDeepSeekCredential(key); err != nil {
+				return "", err
+			}
 			return key, nil
 		} else if strings.TrimSpace(values["DEEPSEEK_API_KEY"]) != "" {
 			// An inherited environment value wins over the official DSH store
@@ -1874,7 +1932,7 @@ func (a *App) resolveDSHCredential() (string, error) {
 		}
 		if !missingCredentialValue(managed.MemoryLLMAPIKey) {
 			if err := a.validateProviderCredential(context.Background(), firstNonEmptyString(managed.MemoryLLMBaseURL, dshProviderBaseURL(values)), managed.MemoryLLMAPIKey); err == nil {
-				if err := install.EnsureDSHProviderKey(values, managed.MemoryLLMAPIKey); err != nil {
+				if err := a.persistResolvedDeepSeekCredential(managed.MemoryLLMAPIKey); err != nil {
 					return "", err
 				}
 				return managed.MemoryLLMAPIKey, nil
@@ -1899,12 +1957,51 @@ func (a *App) resolveDSHCredential() (string, error) {
 			}
 			return "", credentialValidationFailure("DeepSeek", "baron deepseek-harness init", validationErr)
 		}
-		if err := install.EnsureDSHProviderKey(values, key); err != nil {
+		if err := a.persistResolvedDeepSeekCredential(key); err != nil {
 			return "", err
 		}
 		return key, nil
 	}
 	return "", credentialValidationFailure("DeepSeek", "baron deepseek-harness init", credentials.ErrInvalidProviderCredential)
+}
+
+// persistResolvedDeepSeekCredential keeps the one-key bootstrap contract
+// intact. DSH remains the official credential store; when a managed runtime
+// is active, the same validated key is also staged into Strix's protected
+// environment. Tencent consumes the DSH key during its later bootstrap step,
+// so this path never creates a partial Tencent deployment before checkout.
+func (a *App) persistResolvedDeepSeekCredential(key string) error {
+	values := processEnvironment()
+	dshPath, err := install.DSHCredentialPath(values)
+	if err != nil {
+		return err
+	}
+	global, _, err := a.loadGlobal()
+	if err != nil {
+		return err
+	}
+	if global.ManagedRuntime == nil || strings.TrimSpace(global.ManagedRuntime.Root) == "" {
+		return install.EnsureDSHProviderKey(values, key)
+	}
+	paths, err := managedruntime.ResolvePaths(global.ManagedRuntime.Root)
+	if err != nil {
+		return err
+	}
+	managed := install.TencentRuntimeConfig{}
+	if strings.TrimSpace(global.TencentInstallPath) != "" {
+		managed, err = install.LoadTencentRuntimeConfig(global.TencentInstallPath)
+		if err != nil {
+			return err
+		}
+	}
+	provider := install.ProviderConfig{
+		Name:    "deepseek",
+		BaseURL: configuredProviderBaseURL(values, managed.MemoryLLMBaseURL),
+		Model:   firstNonEmptyString(values["STRIX_LLM"], managed.MemoryLLMModel, values["DEEPSEEK_MODEL"]),
+	}
+	return install.RotateDeepSeek(context.Background(), install.CredentialFanout{
+		DSHPath: dshPath, StrixEnvPath: filepath.Join(paths.Credentials, "strix.env"), StrixProvider: provider,
+	}, key)
 }
 
 func (a *App) resolveTencentRuntimeConfig(deploymentRoot string) (install.TencentRuntimeConfig, error) {
@@ -1992,15 +2089,47 @@ func (a *App) SetCredential(provider string) error {
 	if key == "" {
 		return credentialValidationFailure("DeepSeek", deepseekCredentialCommand, credentials.ErrInvalidProviderCredential)
 	}
-	if err := install.EnsureDSHProviderKey(values, key); err != nil {
+	dshPath, err := install.DSHCredentialPath(values)
+	if err != nil {
+		return err
+	}
+	tencentEnvPath := ""
+	if strings.TrimSpace(global.TencentInstallPath) != "" {
+		deploymentRoot := global.TencentInstallPath
+		deployDir := filepath.Join(deploymentRoot, "deploy", "global-images")
+		candidate := filepath.Join(deployDir, ".env")
+		if _, statErr := os.Stat(candidate); statErr == nil {
+			tencentEnvPath = candidate
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
+		}
+		if _, startErr := os.Stat(filepath.Join(deployDir, "start-memory-core.sh")); startErr == nil {
+			// Reload happens only after every credential target commits below.
+		} else if !errors.Is(startErr, os.ErrNotExist) {
+			return startErr
+		}
+	}
+	strixEnvPath := ""
+	if global.ManagedRuntime != nil && strings.TrimSpace(global.ManagedRuntime.Root) != "" {
+		paths, pathErr := managedruntime.ResolvePaths(global.ManagedRuntime.Root)
+		if pathErr != nil {
+			return pathErr
+		}
+		strixEnvPath = filepath.Join(paths.Credentials, "strix.env")
+	}
+	strixProvider := install.ProviderConfig{
+		Name:    "deepseek",
+		BaseURL: configuredProviderBaseURL(values, managed.MemoryLLMBaseURL),
+		Model:   firstNonEmptyString(values["STRIX_LLM"], managed.MemoryLLMModel, values["DEEPSEEK_MODEL"]),
+	}
+	if err := install.RotateDeepSeek(context.Background(), install.CredentialFanout{
+		DSHPath: dshPath, TencentEnvPath: tencentEnvPath, StrixEnvPath: strixEnvPath, StrixProvider: strixProvider,
+	}, key); err != nil {
 		return err
 	}
 	if strings.TrimSpace(global.TencentInstallPath) != "" {
 		deploymentRoot := global.TencentInstallPath
 		deployDir := filepath.Join(deploymentRoot, "deploy", "global-images")
-		if replaceErr := install.ReplaceTencentRuntimeAPIKey(deployDir, key); replaceErr != nil && !errors.Is(replaceErr, os.ErrNotExist) {
-			return replaceErr
-		}
 		if _, startErr := os.Stat(filepath.Join(deployDir, "start-memory-core.sh")); startErr == nil {
 			if reloadErr := install.ReloadTencentDeployment(context.Background(), a.commandRunner(), install.TencentDeploymentOptions{
 				Root: deploymentRoot, UseSudo: runtime.GOOS == "linux",
@@ -2158,10 +2287,22 @@ func installDSHWithChange(path, dshVersion string) (install.DSHReport, bool, err
 	return report, changed, err
 }
 
-func mergeCodexWithChange(path string) (bool, error) {
-	return install.MergeCodexHooksWithChange(path, "baron")
+func baronHookCommand() string {
+	executable, err := os.Executable()
+	if err != nil || strings.TrimSpace(executable) == "" {
+		return "baron"
+	}
+	executable = filepath.Clean(executable)
+	if runtime.GOOS == "windows" {
+		return `"` + strings.ReplaceAll(executable, `"`, `\"`) + `"`
+	}
+	return executable
 }
 
-func mergeCodex(path string) error { return install.MergeCodexHooks(path, "baron") }
+func mergeCodexWithChange(path string) (bool, error) {
+	return install.MergeCodexHooksWithChange(path, baronHookCommand())
+}
+
+func mergeCodex(path string) error { return install.MergeCodexHooks(path, baronHookCommand()) }
 
 type installReport struct{ Components []string }

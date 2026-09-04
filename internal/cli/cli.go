@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/baron-shared-brain/baron/internal/pentest"
 	"github.com/spf13/cobra"
 )
 
@@ -64,6 +65,10 @@ type Options struct {
 	InitNotice         map[string]string
 	InitNoticeFunc     map[string]func() string
 	Hook               func(client, event string, input io.Reader, output io.Writer) error
+	Pentest            func(pentest.Request) (string, error)
+	PentestStatus      func(jobID string, jsonOutput bool) (string, error)
+	PentestReport      func(jobID string, jsonOutput bool) (string, error)
+	PentestStop        func(jobID string) (string, error)
 }
 
 func (o *Options) normalize() {
@@ -189,8 +194,9 @@ func New(options Options) *cobra.Command {
 	}
 	restore.Flags().BoolVar(&replaceExisting, "replace-existing", false, "replace an existing Baron state only after moving it to a recoverable sibling backup")
 	root.AddCommand(restore)
-	root.AddCommand(binaryCommand("install", "Download and install the latest verified Baron release.", options.Install, options.RunWithLoading))
-	root.AddCommand(binaryCommand("update", "Download and atomically update to the latest verified Baron release.", options.Update, options.RunWithLoading))
+	root.AddCommand(binaryCommand("install", "Install the latest verified Baron release and managed runtime bundle.", options.Install, options.RunWithLoading))
+	root.AddCommand(binaryCommand("update", "Atomically update Baron and its managed runtime bundle.", options.Update, options.RunWithLoading))
+	root.AddCommand(pentestCommand(options))
 	root.AddCommand(permissionsCommand(options))
 	root.AddCommand(uninstallCommand(options))
 
@@ -289,6 +295,121 @@ func binaryCommand(name, short string, handler func() (string, error), loader fu
 	}
 }
 
+func pentestCommand(options Options) *cobra.Command {
+	var normal, deep, nonInteractive bool
+	var target string
+	command := &cobra.Command{
+		Use:   "pentest [project-path]",
+		Short: "Run a bounded Strix security assessment without granting it source write access.",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.Pentest == nil {
+				return errors.New("pentest handler is not configured")
+			}
+			raw := make([]string, 0, len(args)+4)
+			if normal {
+				raw = append(raw, "--normal")
+			}
+			if deep {
+				raw = append(raw, "--deep")
+			}
+			if nonInteractive {
+				raw = append(raw, "--non-interactive")
+			}
+			if target != "" {
+				raw = append(raw, "--target", target)
+			}
+			raw = append(raw, args...)
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			request, err := pentest.ParseRequest(raw, cwd)
+			if err != nil {
+				return err
+			}
+			message := ""
+			action := func() error {
+				message, err = options.Pentest(request)
+				return err
+			}
+			if err := runWithLoading(options, "Running Baron pentest", action); err != nil {
+				return err
+			}
+			if strings.TrimSpace(message) != "" {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), message)
+			}
+			return nil
+		},
+	}
+	command.Flags().BoolVar(&normal, "normal", false, "use the bounded standard Strix profile")
+	command.Flags().BoolVar(&deep, "deep", false, "use the bounded deep Strix profile")
+	command.Flags().StringVar(&target, "target", "", "scan an HTTPS target; HTTP is restricted to loopback")
+	command.Flags().BoolVar(&nonInteractive, "non-interactive", false, "fail instead of prompting for missing scan input")
+	command.AddCommand(pentestStatusCommand(options), pentestReportCommand(options), pentestStopCommand(options))
+	return command
+}
+
+func pentestStatusCommand(options Options) *cobra.Command {
+	jsonOutput := false
+	command := &cobra.Command{
+		Use:   "status <job-id>",
+		Short: "Show a local pentest job status.",
+		Args:  exactArgs(1, "pentest status requires a job ID"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.PentestStatus == nil {
+				return errors.New("pentest status handler is not configured")
+			}
+			message, err := options.PentestStatus(args[0], jsonOutput)
+			if strings.TrimSpace(message) != "" {
+				_, _ = io.WriteString(cmd.OutOrStdout(), message)
+			}
+			return err
+		},
+	}
+	command.Flags().BoolVar(&jsonOutput, "json", false, "render machine-readable JSON")
+	return command
+}
+
+func pentestReportCommand(options Options) *cobra.Command {
+	jsonOutput := false
+	command := &cobra.Command{
+		Use:   "report <job-id>",
+		Short: "Render a local pentest report.",
+		Args:  exactArgs(1, "pentest report requires a job ID"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.PentestReport == nil {
+				return errors.New("pentest report handler is not configured")
+			}
+			message, err := options.PentestReport(args[0], jsonOutput)
+			if strings.TrimSpace(message) != "" {
+				_, _ = io.WriteString(cmd.OutOrStdout(), message)
+			}
+			return err
+		},
+	}
+	command.Flags().BoolVar(&jsonOutput, "json", false, "render machine-readable JSON")
+	return command
+}
+
+func pentestStopCommand(options Options) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop <job-id>",
+		Short: "Stop only the processes and containers owned by a pentest job.",
+		Args:  exactArgs(1, "pentest stop requires a job ID"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if options.PentestStop == nil {
+				return errors.New("pentest stop handler is not configured")
+			}
+			message, err := options.PentestStop(args[0])
+			if strings.TrimSpace(message) != "" {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), message)
+			}
+			return err
+		},
+	}
+}
+
 func runWithLoading(options Options, label string, action func() error) error {
 	if options.RunWithLoading == nil {
 		return action()
@@ -381,14 +502,14 @@ func uninstallCommand(options Options) *cobra.Command {
 	purgeAll := true
 	command := &cobra.Command{
 		Use:   "uninstall",
-		Short: "Remove Baron and its known runtime state and host dependencies.",
+		Short: "Remove Baron-owned integration state and managed runtime.",
 		Args:  exactArgs(0, "uninstall accepts no arguments"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if options.Uninstall == nil {
 				return errors.New("uninstall handler is not configured")
 			}
 			if !yes {
-				plan := "Baron full uninstall will remove Baron, DSH, Codex, Tencent, Docker, known host dependencies, caches, and known credentials."
+				plan := "Baron uninstall removes Baron-owned integration state, managed runtime generations, managed credentials, and verified Baron-owned Tencent artifacts. Shared DSH/Codex homes, system runtimes, unrelated Docker objects, and user source are preserved."
 				if options.UninstallPlan != nil {
 					var err error
 					plan, err = options.UninstallPlan(purgeAll)
@@ -427,7 +548,7 @@ func uninstallCommand(options Options) *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&yes, "yes", false, "skip the interactive confirmation prompt")
-	command.Flags().BoolVar(&purgeAll, "purge-all", true, "remove Baron, DSH, Codex, Tencent, Docker, host dependencies, caches, and known credentials")
+	command.Flags().BoolVar(&purgeAll, "purge-all", true, "remove Baron-owned integration state, managed runtime, credentials, and verified Tencent artifacts")
 	command.Flags().BoolVar(&purgeAll, "purge-shared", true, "deprecated alias for --purge-all")
 	return command
 }

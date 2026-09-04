@@ -8,9 +8,13 @@ import (
 	"testing"
 
 	"github.com/baron-shared-brain/baron/internal/contracts"
+	"github.com/baron-shared-brain/baron/internal/testsupport"
 )
 
 func TestSetupIsIdempotentAndProtectsProjectSecret(t *testing.T) {
+	if !testsupport.UnixModeBitsReliable() {
+		t.Skip("Windows ACLs do not expose Unix permission bits")
+	}
 	root := filepath.Join(t.TempDir(), "Project A - Tiếng Việt")
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)

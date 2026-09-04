@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -570,7 +571,15 @@ func WriteReceiptIfChanged(path string, receipt Receipt) (bool, error) {
 
 func LegacyCollision(path string) bool {
 	info, err := os.Stat(path)
-	return err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if runtime.GOOS == "windows" {
+		// Windows executable ACLs are not represented by the Unix execute bits;
+		// an existing regular file at the launcher path is unsafe to replace.
+		return info.Mode().IsRegular()
+	}
+	return info.Mode().Perm()&0o111 != 0
 }
 
 func readJSONMap(path string) (map[string]any, error) {

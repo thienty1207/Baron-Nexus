@@ -25,5 +25,27 @@
     "@deepseek-ai/dsh-mcp-client": "latest",
     "dsh-reverse-skill": "latest-default-head",
     "baron-dsh-adapter": "0.1.0"
+  },
+  "managed_runtime": {
+    "release": "0.1.22",
+    "catalog": "configs/managed-runtime-catalog.json",
+    "resolution": "one immutable plan per install/update with stable exact platform and architecture",
+    "required_components": ["uv", "python", "strix", "bun", "go", "node", "npm", "pnpm", "dsh", "codex"],
+    "install_methods": {
+      "archive": "verified archive extraction",
+      "npm": "verified package artifact installed into a Baron generation with scripts disabled",
+      "uv-tool": "verified package artifact installed by managed uv into a Baron generation"
+    },
+    "python": {
+      "policy": "newest stable CPython compatible with the resolved Strix release",
+      "tested_min": "3.12",
+      "tested_max": "3.14"
+    },
+    "packages": {
+      "strix": "strix-agent",
+      "dsh": "@deepseek-ai/dsh",
+      "codex": "@openai/codex",
+      "pnpm": "pnpm"
+    }
   }
 }

@@ -31,6 +31,25 @@ export function normalizeEvent(event) {
   return event;
 }
 
+export function detectPentestRequest(payload) {
+  const prompt = promptFromPayload(payload);
+  if (prompt === "") return null;
+  const normalized = normalizePrompt(prompt);
+  if (!/(^|\s)(pentest|penetration\s+test|security\s+test|kiem\s+thu\s+bao\s+mat|kiem\s+tra\s+bao\s+mat)(\s|$)/i.test(normalized)) return null;
+  const mode = /(^|\s|-)(deep|deep\s+scan|sau)(\s|$)/i.test(normalized) ? "deep" :
+    /(^|\s|-)(normal|standard|thuong)(\s|$)/i.test(normalized) ? "normal" : "";
+  return { mode, prompt };
+}
+
+export function createPentestDirective(payload) {
+  const request = detectPentestRequest(payload);
+  if (request === null) return "";
+  if (request.mode === "") {
+    return "[Baron pentest directive] The user requested a pentest but did not choose normal or deep. Ask which mode to run before starting; do not launch Strix from a lifecycle hook.";
+  }
+  return `[Baron pentest directive] The user explicitly requested a ${request.mode} pentest. Run baron pentest --${request.mode} now, read the canonical report, and remediate only through the active agent after Baron records the pre-fix checkpoint. Strix is report-only and must not modify the real source tree. Test and retest findings, report the result, and do not commit, push, deploy, or publish.`;
+}
+
 export function createCodexAdapter(options = {}) {
   const binary = options.baronBinary ?? process.env.BARON_BINARY ?? "baron";
   const cwd = options.cwd ?? process.cwd();
@@ -40,7 +59,7 @@ export function createCodexAdapter(options = {}) {
     version,
     onEvent: (event, payload) => invoke(binary, cwd, timeoutMs, normalizeEvent(event), normalizeTaskPayload(payload)),
     onSessionStart: (payload) => invoke(binary, cwd, timeoutMs, "SessionStart", normalizeTaskPayload(payload)),
-    onUserPrompt: (payload) => invoke(binary, cwd, timeoutMs, "UserPromptSubmit", normalizeTaskPayload(payload)),
+    onUserPrompt: async (payload) => addPentestDirective(await invoke(binary, cwd, timeoutMs, "UserPromptSubmit", normalizeTaskPayload(payload)), payload),
     onPreToolUse: (payload) => invoke(binary, cwd, timeoutMs, "PreToolUse", normalizeTaskPayload(payload)),
     onPostToolUse: (payload) => invoke(binary, cwd, timeoutMs, "PostToolUse", normalizeTaskPayload(payload)),
     onPreCompact: (payload) => invoke(binary, cwd, timeoutMs, "PreCompact", normalizeTaskPayload(payload)),
@@ -57,6 +76,41 @@ export function createCodexAdapter(options = {}) {
   };
 }
 
+function addPentestDirective(response, payload) {
+  const directive = createPentestDirective(payload);
+  if (directive === "") return response;
+  const result = response && typeof response === "object" && !Array.isArray(response) ? { ...response } : {};
+  const hookOutput = result.hookSpecificOutput && typeof result.hookSpecificOutput === "object" && !Array.isArray(result.hookSpecificOutput)
+    ? { ...result.hookSpecificOutput } : { hookEventName: "UserPromptSubmit" };
+  const existing = typeof hookOutput.additionalContext === "string" ? hookOutput.additionalContext.trim() : "";
+  hookOutput.additionalContext = existing === "" ? directive : `${existing}\n${directive}`;
+  result.hookSpecificOutput = hookOutput;
+  if (result.continue === undefined) result.continue = true;
+  return result;
+}
+
+function promptFromPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "";
+  for (const key of ["prompt", "user_prompt", "userPrompt", "text", "message"]) {
+    if (typeof payload[key] === "string" && payload[key].trim() !== "") return payload[key].trim();
+  }
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object" || message.role !== "user") continue;
+    if (typeof message.content === "string" && message.content.trim() !== "") return message.content.trim();
+    if (Array.isArray(message.content)) {
+      const block = message.content.find((item) => item && typeof item.text === "string" && item.text.trim() !== "");
+      if (block) return block.text.trim();
+    }
+  }
+  return "";
+}
+
+function normalizePrompt(value) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[—–]/g, "-");
+}
+
 function normalizeTaskPayload(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return payload;
   const root = { ...payload };
@@ -71,7 +125,7 @@ function normalizeTaskPayload(payload) {
 
 function invoke(binary, cwd, timeoutMs, event, payload) {
   return new Promise((resolve) => {
-    const child = spawn(binary, ["hook", "codex", event], {
+    const child = spawnBaron(binary, ["hook", "codex", event], {
       cwd,
       stdio: ["pipe", "pipe", "ignore"],
     });
@@ -100,6 +154,13 @@ function invoke(binary, cwd, timeoutMs, event, payload) {
     });
     child.stdin.end(JSON.stringify({ payload }));
   });
+}
+
+function spawnBaron(binary, args, options) {
+  if (process.platform === "win32" && /\.(cmd|bat)$/i.test(binary)) {
+    return spawn(process.env.ComSpec || "cmd.exe", ["/d", "/c", binary, ...args], options);
+  }
+  return spawn(binary, args, options);
 }
 
 if (process.argv[1] && process.argv[1].endsWith("index.js") && process.argv[2]) {

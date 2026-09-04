@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,14 @@ import (
 
 	"github.com/baron-shared-brain/baron/internal/contracts"
 )
+
+func TestOpenWithContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := OpenWithContext(ctx, filepath.Join(t.TempDir(), "state.db")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("OpenWithContext error=%v, want context.Canceled", err)
+	}
+}
 
 func TestSQLiteJournalIsWALAndDuplicateSafe(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "runtime", "state.db"))

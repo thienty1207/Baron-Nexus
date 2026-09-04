@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/baron-shared-brain/baron/internal/testsupport"
 )
 
 func TestAtomicWriteKeepsOriginalWhenRenameIsInterrupted(t *testing.T) {
@@ -46,6 +48,9 @@ func TestRedactRemovesExactAndCommonCredentialPatterns(t *testing.T) {
 }
 
 func TestEnvRoundTripAndRestrictiveMode(t *testing.T) {
+	if !testsupport.UnixModeBitsReliable() {
+		t.Skip("Windows ACLs do not expose Unix permission bits")
+	}
 	path := filepath.Join(t.TempDir(), ".baron", ".env")
 	want := map[string]string{
 		"BARON_TENCENT_ENDPOINT": "http://127.0.0.1:8420",

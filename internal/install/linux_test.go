@@ -424,6 +424,44 @@ func TestEnsureDockerWindowsReturnsManualGuidanceBeforeHostInspection(t *testing
 	}
 }
 
+func TestEnsureDockerWindowsVerifiesDockerDesktopWithoutSudo(t *testing.T) {
+	fixture := &dockerBootstrapFixture{
+		available: map[string]bool{"docker": true},
+		outputs:   map[string]string{"docker info": "Docker Desktop server ready"},
+	}
+	report, err := EnsureDocker(context.Background(), fixture, DockerBootstrapOptions{GOOS: "windows", GOARCH: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Ready || report.DockerPath != "/fake/docker" || report.UsedSudo || report.Installed {
+		t.Fatalf("Windows Docker verification report=%#v", report)
+	}
+	if len(fixture.calls) != 1 || fixture.calls[0] != "docker info" {
+		t.Fatalf("unexpected Windows Docker verification calls=%#v", fixture.calls)
+	}
+}
+
+func TestEnsureDockerWindowsAcceptsVerifiedWSL2DockerEngine(t *testing.T) {
+	fixture := &dockerBootstrapFixture{
+		available: map[string]bool{"wsl": true},
+		outputs: map[string]string{
+			"wsl --status":                             "Default Version: 2\n",
+			"wsl --list --verbose":                     "  NAME      STATE           VERSION\n* Ubuntu    Running         2\n",
+			"wsl --distribution Ubuntu -- docker info": "Docker Engine inside Ubuntu WSL2",
+		},
+	}
+	report, err := EnsureDocker(context.Background(), fixture, DockerBootstrapOptions{GOOS: "windows", GOARCH: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Ready || report.Backend != "wsl2" || report.WSLDistro != "Ubuntu" || !report.BridgeVerified || report.UsedSudo || report.Installed {
+		t.Fatalf("Windows WSL2 Docker verification report=%#v", report)
+	}
+	if strings.Contains(strings.Join(fixture.calls, "\n"), "sudo") {
+		t.Fatalf("Windows WSL2 path attempted sudo: %#v", fixture.calls)
+	}
+}
+
 func TestEnsureDockerCleansOnlyNewAptStateAfterRepositoryFailure(t *testing.T) {
 	fixture := &dockerBootstrapFixture{
 		available:                    map[string]bool{"sudo": true},

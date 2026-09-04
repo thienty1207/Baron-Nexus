@@ -4,6 +4,7 @@ package uninstall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/baron-shared-brain/baron/internal/config"
 	"github.com/baron-shared-brain/baron/internal/install"
 	"github.com/baron-shared-brain/baron/internal/permissions"
 	"github.com/baron-shared-brain/baron/internal/project"
@@ -35,6 +37,7 @@ type Options struct {
 	HomeDir              string
 	SourceCheckouts      []string
 	EnvironmentFiles     []string
+	ManagedRuntime       *config.ManagedRuntimeState
 	GOOS                 string
 	Runner               install.CommandRunner
 	RemoveExecutable     func(string) error
@@ -46,19 +49,31 @@ type Plan struct {
 }
 
 type Report struct {
-	Removed  []string
-	Skipped  []string
-	Warnings []string
+	Removed   []string
+	Skipped   []string
+	Preserved []string
+	Failed    []string
+	Warnings  []string
 }
 
 func (r Report) String() string {
 	var builder strings.Builder
-	builder.WriteString("Baron uninstall complete.\n")
+	if len(r.Failed) == 0 {
+		builder.WriteString("Baron uninstall complete.\n")
+	} else {
+		builder.WriteString("Baron uninstall completed with failures.\n")
+	}
 	for _, path := range r.Removed {
 		fmt.Fprintf(&builder, "  removed %s\n", path)
 	}
 	for _, path := range r.Skipped {
 		fmt.Fprintf(&builder, "  skipped %s\n", path)
+	}
+	for _, path := range r.Preserved {
+		fmt.Fprintf(&builder, "  preserved %s\n", path)
+	}
+	for _, path := range r.Failed {
+		fmt.Fprintf(&builder, "  failed %s\n", path)
 	}
 	for _, warning := range r.Warnings {
 		fmt.Fprintf(&builder, "  warning %s\n", warning)
@@ -67,7 +82,6 @@ func (r Report) String() string {
 }
 
 func BuildPlan(options Options) (Plan, error) {
-	purgeShared := options.PurgeShared || options.PurgeAll
 	globalPath := filepath.Clean(strings.TrimSpace(options.GlobalPath))
 	if globalPath == "." || globalPath == "" {
 		return Plan{}, errors.New("Baron global state path is required")
@@ -125,9 +139,8 @@ func BuildPlan(options Options) (Plan, error) {
 		if err := rejectDangerousPath(dshHome); err != nil {
 			return Plan{}, err
 		}
-		if purgeShared && pathsOverlap(globalDir, dshHome) {
-			return Plan{}, fmt.Errorf("refusing to purge DSH_HOME overlapping Baron global config: %s", dshHome)
-		}
+		// DSH_HOME is user-owned. Baron only removes its credential key and
+		// profile blocks below; the home itself is never a purge target.
 		for _, path := range options.DSHProfilePatchPaths {
 			if !pathWithin(dshHome, path) {
 				return Plan{}, fmt.Errorf("refusing to remove DSH patch outside DSH_HOME: %s", path)
@@ -137,9 +150,6 @@ func BuildPlan(options Options) (Plan, error) {
 		if options.DSHCredentialPath != "" && !pathWithin(dshHome, options.DSHCredentialPath) {
 			return Plan{}, fmt.Errorf("refusing to remove DSH credentials outside DSH_HOME: %s", options.DSHCredentialPath)
 		}
-		if purgeShared {
-			add(dshHome)
-		}
 	}
 
 	codexHome := filepath.Clean(strings.TrimSpace(options.CodexHome))
@@ -147,14 +157,9 @@ func BuildPlan(options Options) (Plan, error) {
 		if err := rejectDangerousPath(codexHome); err != nil {
 			return Plan{}, err
 		}
-		if purgeShared && pathsOverlap(globalDir, codexHome) {
-			return Plan{}, fmt.Errorf("refusing to purge CODEX_HOME overlapping Baron global config: %s", codexHome)
-		}
+		// CODEX_HOME is user-owned. Baron only removes its hook entries.
 		if options.CodexHooksPath != "" && !pathWithin(codexHome, options.CodexHooksPath) {
 			return Plan{}, fmt.Errorf("refusing to remove Codex hooks outside CODEX_HOME: %s", options.CodexHooksPath)
-		}
-		if purgeShared {
-			add(codexHome)
 		}
 	}
 	if options.CodexHooksPath != "" {
@@ -199,33 +204,19 @@ func BuildPlan(options Options) (Plan, error) {
 		}
 		add(options.ExecutablePath)
 	}
-	packages := "@deepseek-ai/dsh @openai/codex"
 	if options.PurgeAll {
-		packages += " pnpm"
-	}
-	plan.Commands = append(plan.Commands, "npm uninstall --global "+packages)
-	if options.TencentInstallPath != "" {
-		plan.Commands = append(plan.Commands, "docker rm -f tdai-memory-core tdai-memory-hub tdai-proxy")
-	}
-	if options.PurgeAll {
-		home, err := resolvePurgeHome(options)
-		if err != nil {
-			return Plan{}, err
-		}
-		if samePath(filepath.Base(globalDir), "baron") && pathWithin(home, globalDir) {
-			if err := validatePurgePathWithin(home, globalDir); err != nil {
-				return Plan{}, err
+		if options.ManagedRuntime != nil {
+			targets, targetErr := ManagedPurgeTargets(*options.ManagedRuntime)
+			if targetErr != nil {
+				return Plan{}, targetErr
 			}
-			add(globalDir)
+			for _, target := range targets {
+				add(target.Path)
+			}
+			plan.Commands = append(plan.Commands, "remove Baron-owned managed runtime targets only")
+		} else {
+			plan.Commands = append(plan.Commands, "preserve unverified external runtimes and Docker objects")
 		}
-		resources, err := fullPurgeResources(options, home)
-		if err != nil {
-			return Plan{}, err
-		}
-		for _, path := range resources {
-			add(path)
-		}
-		plan.Commands = append(plan.Commands, fullPurgePlanCommands(options)...)
 	}
 	return plan, nil
 }
@@ -288,8 +279,7 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 		return Report{}, err
 	}
 	report := Report{}
-	purgeShared := options.PurgeShared || options.PurgeAll
-	if options.CodexHooksPath != "" && !purgeShared {
+	if options.CodexHooksPath != "" {
 		changed, removeErr := install.RemoveCodexHooks(options.CodexHooksPath, "baron")
 		if removeErr != nil {
 			return report, fmt.Errorf("remove Baron Codex hooks: %w", removeErr)
@@ -319,63 +309,69 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 			report.Skipped = append(report.Skipped, path+" (no Baron rules)")
 		}
 	}
-	if !purgeShared {
-		for _, path := range options.DSHProfilePatchPaths {
-			changed, removeErr := install.RemoveDSHProfilePatch(path)
-			if removeErr != nil {
-				return report, fmt.Errorf("remove Baron DSH patch: %w", removeErr)
-			}
-			if changed {
-				report.Removed = append(report.Removed, path+" (Baron patch)")
-			} else {
-				report.Skipped = append(report.Skipped, path+" (no Baron patch)")
-			}
+	for _, path := range options.DSHProfilePatchPaths {
+		changed, removeErr := install.RemoveDSHProfilePatch(path)
+		if removeErr != nil {
+			return report, fmt.Errorf("remove Baron DSH patch: %w", removeErr)
 		}
-		if options.DSHCredentialPath != "" {
-			changed, removeErr := install.RemoveDSHProviderKeyAt(options.DSHCredentialPath)
-			if removeErr != nil {
-				return report, fmt.Errorf("remove DeepSeek API key: %w", removeErr)
-			}
-			if changed {
-				report.Removed = append(report.Removed, options.DSHCredentialPath+" (DeepSeek API key)")
-			} else {
-				report.Skipped = append(report.Skipped, options.DSHCredentialPath+" (no DeepSeek API key)")
-			}
-		}
-		for _, path := range append([]string{options.DSHConfigPath, options.CodexHooksPath}, options.DSHProfilePatchPaths...) {
-			if err := removeBaronBackups(path, &report); err != nil {
-				return report, err
-			}
+		if changed {
+			report.Removed = append(report.Removed, path+" (Baron patch)")
+		} else {
+			report.Skipped = append(report.Skipped, path+" (no Baron patch)")
 		}
 	}
-
-	if options.Runner != nil && !options.PurgeAll {
-		if _, lookErr := options.Runner.LookPath("npm"); lookErr != nil {
-			report.Skipped = append(report.Skipped, "npm global packages (npm not found)")
-		} else if removeErr := install.RemoveGlobalNPM(ctx, options.Runner, "@deepseek-ai/dsh", "@openai/codex"); removeErr != nil {
-			report.Warnings = append(report.Warnings, "npm global package cleanup failed: "+removeErr.Error())
+	if options.DSHCredentialPath != "" {
+		changed, removeErr := install.RemoveDSHProviderKeyAt(options.DSHCredentialPath)
+		if removeErr != nil {
+			return report, fmt.Errorf("remove DeepSeek API key: %w", removeErr)
+		}
+		if changed {
+			report.Removed = append(report.Removed, options.DSHCredentialPath+" (DeepSeek API key)")
+		} else {
+			report.Skipped = append(report.Skipped, options.DSHCredentialPath+" (no DeepSeek API key)")
 		}
 	}
+	for _, path := range append([]string{options.DSHConfigPath, options.CodexHooksPath}, options.DSHProfilePatchPaths...) {
+		if err := removeBaronBackups(path, &report); err != nil {
+			return report, err
+		}
+	}
+	// System-wide npm packages cannot be attributed to Baron without a
+	// receipt. Preserve them rather than uninstalling another project's tools.
+	report.Preserved = append(report.Preserved, "system-wide npm packages (ownership receipt unavailable)")
 
 	if options.TencentInstallPath != "" && options.Runner != nil {
 		removeTencent(ctx, options, &report)
 	}
-	purgeHome := ""
+	managedPaths := map[string]struct{}{}
 	if options.PurgeAll {
-		purgeHome, err = resolvePurgeHome(options)
-		if err != nil {
-			return report, err
+		if options.ManagedRuntime != nil {
+			targets, targetErr := ManagedPurgeTargets(*options.ManagedRuntime)
+			if targetErr != nil {
+				return report, targetErr
+			}
+			purgeReport := PurgeManagedRuntime(ctx, PurgeOptions{
+				Root:              options.ManagedRuntime.Root,
+				LauncherDirectory: options.ManagedRuntime.LauncherDirectory,
+				Targets:           targets,
+			})
+			report.Removed = append(report.Removed, purgeReport.Removed...)
+			report.Skipped = append(report.Skipped, purgeReport.Skipped...)
+			report.Preserved = append(report.Preserved, purgeReport.Preserved...)
+			report.Failed = append(report.Failed, purgeReport.Failed...)
+			for _, target := range targets {
+				managedPaths[filepath.Clean(target.Path)] = struct{}{}
+			}
 		}
-		executeFullPurge(ctx, options, &report)
 	}
 	for _, path := range plan.Resources {
-		if shouldSkipSharedChild(path, options) {
+		if _, managed := managedPaths[filepath.Clean(path)]; managed {
 			continue
 		}
 		if path == options.CodexHooksPath || path == options.DSHCredentialPath || containsPath(options.DSHProfilePatchPaths, path) || isPermissionLauncher(path, options) || isProjectGitignore(path, options) {
 			continue
 		}
-		if err := removePurgePath(path, purgeHome, &report); err != nil {
+		if err := removePurgePath(path, "", &report); err != nil {
 			return report, err
 		}
 	}
@@ -402,6 +398,9 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 		}
 		report.Removed = append(report.Removed, options.ExecutablePath+" (Baron binary)")
 	}
+	if len(report.Failed) > 0 {
+		return report, fmt.Errorf("Baron uninstall completed with failures")
+	}
 	if len(report.Warnings) > 0 {
 		return report, fmt.Errorf("Baron uninstall completed with warnings")
 	}
@@ -410,6 +409,11 @@ func Execute(ctx context.Context, options Options) (Report, error) {
 
 func removeTencent(ctx context.Context, options Options, report *Report) {
 	root := filepath.Clean(options.TencentInstallPath)
+	manifest, manifestErr := install.ReadTencentDeploymentManifest(root)
+	if manifestErr != nil {
+		report.Preserved = append(report.Preserved, "Tencent Docker objects (deployment manifest unavailable)")
+		return
+	}
 	for _, name := range []string{"docker-compose.yml", "compose.yaml", "compose.yml"} {
 		composePath := filepath.Join(root, "deploy", "global-images", name)
 		info, err := os.Lstat(composePath)
@@ -420,20 +424,50 @@ func removeTencent(ctx context.Context, options Options, report *Report) {
 			report.Warnings = append(report.Warnings, "Tencent compose file is not safe: "+composePath)
 			break
 		}
-		if _, err := runDocker(ctx, options.Runner, "compose", "-f", composePath, "down", "--volumes", "--remove-orphans"); err != nil {
+		if _, err := runDocker(ctx, options.Runner, "compose", "-f", composePath, "down", "--remove-orphans"); err != nil {
 			report.Warnings = append(report.Warnings, "Tencent Docker Compose cleanup failed")
 		}
 		break
 	}
 	for _, container := range []string{"tdai-memory-core", "tdai-memory-hub", "tdai-proxy"} {
-		if _, err := runDocker(ctx, options.Runner, "inspect", container); err != nil {
+		if len(manifest.ContainerImageDigests[container]) == 0 {
+			report.Preserved = append(report.Preserved, "Docker container "+container+" (manifest ownership unresolved)")
+			continue
+		}
+		labels, err := runDocker(ctx, options.Runner, "inspect", "--format={{json .Config.Labels}}", container)
+		if err != nil {
 			report.Skipped = append(report.Skipped, "Docker container "+container+" (not present or unavailable)")
+			continue
+		}
+		if !isManagedTencentContainer(labels, root) {
+			report.Preserved = append(report.Preserved, "Docker container "+container+" (ownership label mismatch)")
 			continue
 		}
 		if _, err := runDocker(ctx, options.Runner, "rm", "-f", container); err != nil {
 			report.Warnings = append(report.Warnings, "Docker container cleanup failed for "+container)
 		}
 	}
+}
+
+func isManagedTencentContainer(output, root string) bool {
+	var labels map[string]string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(strings.SplitN(output, "\n", 2)[0])), &labels); err != nil {
+		return false
+	}
+	workingDirectory := strings.TrimSpace(labels["com.docker.compose.project.working_dir"])
+	if workingDirectory != "" && samePath(workingDirectory, root) {
+		return true
+	}
+	configFiles := strings.TrimSpace(labels["com.docker.compose.project.config_files"])
+	if configFiles == "" {
+		return false
+	}
+	for _, file := range strings.Split(configFiles, string(os.PathListSeparator)) {
+		if pathWithin(root, strings.TrimSpace(file)) || samePath(filepath.Dir(strings.TrimSpace(file)), filepath.Join(root, "deploy", "global-images")) {
+			return true
+		}
+	}
+	return false
 }
 
 func runDocker(ctx context.Context, runner install.CommandRunner, args ...string) (string, error) {
@@ -475,24 +509,7 @@ func removePath(path string, report *Report) error {
 }
 
 func removePurgePath(path, home string, report *Report) error {
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		report.Skipped = append(report.Skipped, path+" (already absent)")
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		if !isKnownPurgeLauncherPath(home, path) {
-			return fmt.Errorf("refusing to remove symlink path: %s", path)
-		}
-		if err := os.Remove(path); err != nil {
-			return fmt.Errorf("remove %s: %w", path, err)
-		}
-		report.Removed = append(report.Removed, path)
-		return nil
-	}
+	_ = home
 	return removePath(path, report)
 }
 

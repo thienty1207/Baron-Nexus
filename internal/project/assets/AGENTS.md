@@ -35,12 +35,31 @@ tests, deployment configuration, or provider authentication.
 ## Baron Operations
 
 - `baron install` performs the idempotent first-run bootstrap and project setup.
-- `baron update` updates only the verified Baron binary; it does not rewrite project state.
+- `baron update` updates the verified Baron-managed runtime bundle and refreshes
+  only the current safe project; it does not rewrite user source or credentials.
 - `baron setup` initializes or repairs this project's identity and Tencent binding.
 - `baron repair` retries recoverable Baron, DSH, Codex, or Tencent operations.
 - `baron tencent-memory init` initializes or verifies the managed Tencent deployment.
 - `baron test` reports local and integration readiness without replacing missing external proof.
 - `baron uninstall` is a destructive purge. Do not run it as a normal repair operation.
+
+## Pentest Workflow
+
+- Run a pentest only after the user explicitly requests it and use the approved
+  form: `baron pentest --normal`, `baron pentest --deep`, or `baron pentest
+  --target <https-url> --normal|--deep`.
+- Baron sends Strix an isolated snapshot for local scans. Strix is report-only
+  and must never edit the real working tree, commit, push, deploy, or publish.
+- In a managed Codex or DSH session, read the canonical local job report,
+  validate each finding, and modify source only through the active session's
+  normal tool boundary. Human CLI scans remain report-only.
+- Before a fix, inspect the Git checkpoint and do not overwrite a pre-existing
+  strong source-file overlap. README, lockfiles, generated files, and shared
+  metadata are weak evidence and do not block by themselves.
+- After a fix, run the relevant tests, record verification against the new
+  source fingerprint, retest the finding, and report unresolved or blocked work.
+- Never commit, push, deploy, or publish automatically. Wait for a separate
+  explicit user request.
 
 ## TencentDB Model
 

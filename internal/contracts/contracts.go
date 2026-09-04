@@ -18,9 +18,10 @@ import (
 type HookClient string
 
 const (
-	ClientDSH    HookClient = "dsh"
-	ClientCodex  HookClient = "codex"
-	ClientSystem HookClient = "system"
+	ClientDSH      HookClient = "dsh"
+	ClientCodex    HookClient = "codex"
+	ClientHumanCLI HookClient = "human_cli"
+	ClientSystem   HookClient = "system"
 )
 
 // EventType is the canonical event vocabulary shared by both adapters.

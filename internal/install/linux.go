@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/baron-shared-brain/baron/internal/managedruntime"
 )
 
 // InteractiveCommandRunner is implemented by the native runner so sudo can
@@ -49,16 +51,19 @@ type DockerBootstrapOptions struct {
 }
 
 type DockerBootstrapReport struct {
-	Ready         bool
-	Distribution  string
-	Version       string
-	Architecture  string
-	DockerPath    string
-	UsedSudo      bool
-	Installed     bool
-	DaemonStarted bool
-	NeedsRelogin  bool
-	Message       string
+	Ready          bool
+	Distribution   string
+	Backend        string
+	WSLDistro      string
+	BridgeVerified bool
+	Version        string
+	Architecture   string
+	DockerPath     string
+	UsedSudo       bool
+	Installed      bool
+	DaemonStarted  bool
+	NeedsRelogin   bool
+	Message        string
 }
 
 var dockerPackageNames = []string{"docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"}
@@ -72,8 +77,9 @@ type linuxDistribution struct {
 
 // EnsureDocker validates the host, performs the sudo preflight before any
 // network operation, and installs/repairs Docker through the official apt
-// repository on Ubuntu/Debian only. It deliberately does not add the current
-// user to the root-equivalent docker group.
+// repository on Ubuntu/Debian. On Windows it verifies either an already
+// managed Docker Desktop daemon or a verified Ubuntu WSL2 Docker engine;
+// Baron does not mutate Windows UI components.
 func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBootstrapOptions) (DockerBootstrapReport, error) {
 	if runner == nil {
 		return DockerBootstrapReport{}, errors.New("Docker bootstrap runner is not configured")
@@ -83,6 +89,10 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 	}
 	if options.GOARCH == "" {
 		options.GOARCH = runtime.GOARCH
+	}
+	options.GOOS = strings.ToLower(strings.TrimSpace(options.GOOS))
+	if options.GOOS == "windows" {
+		return verifyWindowsDocker(ctx, runner, options)
 	}
 	if options.GOOS != "linux" {
 		return DockerBootstrapReport{}, errors.New("automatic Docker installation is supported only on Ubuntu/Debian Linux; on Windows install Docker Desktop, WSL2, and Ubuntu manually, then rerun baron tencent-memory init")
@@ -115,6 +125,7 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 
 	report := DockerBootstrapReport{
 		Distribution: distro.ID,
+		Backend:      "linux",
 		Version:      firstNonEmptyLinux(distro.VersionID, codename),
 		Architecture: options.GOARCH,
 	}
@@ -207,6 +218,52 @@ func EnsureDocker(ctx context.Context, runner CommandRunner, options DockerBoots
 	report.Message = dockerPermissionMessage(true)
 	reportStep(options.Progress, "Docker Engine is ready through sudo.")
 	return report, nil
+}
+
+func verifyWindowsDocker(ctx context.Context, runner CommandRunner, options DockerBootstrapOptions) (DockerBootstrapReport, error) {
+	report := DockerBootstrapReport{Distribution: "windows", Backend: "unavailable", Architecture: options.GOARCH}
+	dockerPath, dockerErr := runner.LookPath("docker")
+	if dockerErr == nil {
+		report.DockerPath = dockerPath
+		reportStep(options.Progress, "Verifying Docker Desktop...")
+		if _, runErr := runner.Run(ctx, "docker", "info"); runErr == nil {
+			report.Ready = true
+			report.Backend = "docker"
+			report.Message = "Docker Desktop daemon is ready."
+			reportStep(options.Progress, "Docker Desktop is ready.")
+			return report, nil
+		}
+	}
+
+	// Docker Desktop is optional when Docker Engine is exposed by the Ubuntu
+	// WSL2 distro. Inspecting the distro and its own daemon is required; host
+	// Docker availability alone is not sufficient evidence for this bridge.
+	if _, wslErr := runner.LookPath("wsl"); wslErr == nil {
+		reportStep(options.Progress, "Verifying Docker Engine through Ubuntu WSL2...")
+		platform, platformErr := managedruntime.DetectPlatformFor(ctx, platformCommandRunner{runner: runner}, "windows", options.GOARCH)
+		if platformErr == nil && platform.BridgeVerified {
+			report.Ready = true
+			report.Backend = "wsl2"
+			report.WSLDistro = platform.WSLDistro
+			report.BridgeVerified = true
+			report.Message = "Docker Engine is ready through the verified Ubuntu WSL2 bridge."
+			reportStep(options.Progress, "Ubuntu WSL2 Docker bridge is ready.")
+			return report, nil
+		}
+	}
+	if dockerErr != nil {
+		return report, errors.New("Docker Desktop or a verified Ubuntu WSL2 Docker engine is required on Windows; install and start one, then rerun Baron")
+	}
+	return report, errors.New("Docker Desktop is installed but its daemon is not reachable, and no verified Ubuntu WSL2 Docker engine was found; start Docker Desktop or the WSL2 backend, then rerun Baron")
+}
+
+type platformCommandRunner struct {
+	runner CommandRunner
+}
+
+func (r platformCommandRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	output, err := r.runner.Run(ctx, name, args...)
+	return []byte(output), err
 }
 
 func preflightSudo(ctx context.Context, runner CommandRunner) error {

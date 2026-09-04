@@ -483,6 +483,21 @@ func TestCodexInitOmitsLoginNoticeWhenCodexAuthExists(t *testing.T) {
 	}
 }
 
+func TestBaronHookCommandUsesCurrentExecutable(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := baronHookCommand()
+	want := filepath.Clean(executable)
+	if runtime.GOOS == "windows" {
+		want = `"` + want + `"`
+	}
+	if got != want {
+		t.Fatalf("Baron hook command=%q, want %q", got, want)
+	}
+}
+
 func TestCodexTrustProjectRootFallsBackToCurrentDirectory(t *testing.T) {
 	root := t.TempDir()
 	t.Chdir(root)
@@ -688,6 +703,12 @@ func TestCLIOptionsUpdateUsesVerifiedReleaseWithoutProjectState(t *testing.T) {
 	defer server.Close()
 
 	application := New()
+	// This test exercises the legacy binary-only update fallback. Disable the
+	// default managed coordinator explicitly so the fixture does not require
+	// host Docker/sudo or a runtime catalog.
+	application.ManagedRuntimeManager = nil
+	application.ManagedRuntimePlanResolver = nil
+	application.managedRuntimeDefault = false
 	application.GlobalPath = filepath.Join(root, "global.json")
 	application.ExecutablePath = target
 	application.ReleaseClient = &release.Client{
@@ -764,6 +785,32 @@ func TestCodexHookWrapsRecoveryContextInHookSpecificOutput(t *testing.T) {
 	}
 	if _, ok := response["hookSpecificOutput"]; !ok {
 		t.Fatalf("Codex-specific hook output missing: %s", output.String())
+	}
+}
+
+func TestHookExecutionContextLeavesHeadroomForProviderTimeout(t *testing.T) {
+	ctx, cancel := hookExecutionContext(context.Background())
+	defer cancel()
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("hook execution context has no deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > hookExecutionBudget {
+		t.Fatalf("hook deadline remaining=%s, want >0 and <= %s", remaining, hookExecutionBudget)
+	}
+	if hookExecutionBudget >= 3*time.Second {
+		t.Fatalf("hook budget=%s leaves no headroom below the provider timeout", hookExecutionBudget)
+	}
+
+	parent, parentCancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer parentCancel()
+	child, childCancel := hookExecutionContext(parent)
+	defer childCancel()
+	parentDeadline, _ := parent.Deadline()
+	childDeadline, _ := child.Deadline()
+	if childDeadline.After(parentDeadline) {
+		t.Fatalf("hook context extended parent deadline: child=%s parent=%s", childDeadline, parentDeadline)
 	}
 }
 

@@ -5,9 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/baron-shared-brain/baron/internal/testsupport"
 )
 
 type commandFixture struct {
@@ -292,6 +295,9 @@ func TestEnsureTencentDeploymentPreservesUpstreamEnvAndStartsPinnedStack(t *test
 	if !strings.Contains(string(envData), "MEMORY_LLM_MODEL=example") || !strings.Contains(string(envData), "PROXY_UPSTREAM_MODEL='proxy-model'") {
 		t.Fatalf("upstream env structure/runtime values were not preserved: %q", envData)
 	}
+	if !testsupport.UnixModeBitsReliable() {
+		t.Skip("Windows ACLs do not expose Unix permission bits")
+	}
 	if info, err := os.Stat(filepath.Join(deployDir, ".env")); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("deployment env is not private: info=%v err=%v", info, err)
 	}
@@ -527,6 +533,25 @@ func TestTencentAdminKeyIsReadOnlyFromManagedDeployment(t *testing.T) {
 	key, err := TencentAdminKey(root)
 	if err != nil || key != "sk-admin" {
 		t.Fatalf("unexpected admin key read: %q %v", key, err)
+	}
+}
+
+func TestTencentAdminKeyAcceptsWindowsACLManagedFile(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows ACLs, not Unix mode bits, govern this check")
+	}
+	root := filepath.Join(t.TempDir(), "tencent-memory")
+	path := filepath.Join(root, "deploy", "global-images")
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(path, ".admin-key")
+	if err := os.WriteFile(keyPath, []byte("windows-acl-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key, err := TencentAdminKey(root)
+	if err != nil || key != "windows-acl-key" {
+		t.Fatalf("Windows ACL-managed admin key was rejected: key=%q err=%v", key, err)
 	}
 }
 

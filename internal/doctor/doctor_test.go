@@ -4,10 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/baron-shared-brain/baron/internal/install"
+	"github.com/baron-shared-brain/baron/internal/testsupport"
 )
 
 type fakeProbe struct {
@@ -90,6 +92,9 @@ func TestAllLocalFixtureComponentsGreenHasStableSuccessMessage(t *testing.T) {
 }
 
 func TestWeakCredentialPermissionIsReportedWithoutEchoingContents(t *testing.T) {
+	if !testsupport.UnixModeBitsReliable() {
+		t.Skip("Windows ACLs do not expose Unix permission bits")
+	}
 	path := filepath.Join(t.TempDir(), "global.json")
 	if err := os.WriteFile(path, []byte(`{"UserKey":"sk-secret"}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -132,6 +137,23 @@ func TestLinuxBootstrapDiagnosticsSeparatePackageManagerAndSudo(t *testing.T) {
 	}
 }
 
+func TestOSProbeRunsWindowsBatchThroughCommandInterpreter(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows batch execution is only verified on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "probe.bat")
+	if err := os.WriteFile(path, []byte("@echo BATCH_PROBE_OK\r\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	output, err := (OSProbe{}).RunWithEnvironment(context.Background(), map[string]string{"PATH": os.Getenv("PATH")}, path)
+	if err != nil {
+		t.Fatalf("batch probe failed: %v", err)
+	}
+	if !strings.Contains(output, "BATCH_PROBE_OK") {
+		t.Fatalf("batch probe output=%q", output)
+	}
+}
+
 func TestConfiguredCodexHooksRequireExplicitInteractiveApproval(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hooks.json")
 	if err := os.WriteFile(path, []byte(`{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"baron hook codex SessionStart"}]}]}}`), 0o600); err != nil {
@@ -157,6 +179,24 @@ func TestConfiguredCodexHooksAreReadyWhenProjectTrustIsPersisted(t *testing.T) {
 	result := report.ByName("codex-hooks")
 	if result.Status != StatusReady {
 		t.Fatalf("trusted Codex hooks were not accepted: %#v", result)
+	}
+}
+
+func TestConfiguredUserCodexHooksAreReadyWithoutProjectTrust(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hooks.json")
+	if err := install.MergeCodexHooks(path, "baron"); err != nil {
+		t.Fatal(err)
+	}
+	probe := fakeProbe{commands: map[string]string{"codex": "/usr/bin/codex", "codex --version": "codex 0.153.0"}, errors: map[string]error{}}
+	report := Check(context.Background(), Options{
+		Probe:                probe,
+		CodexAuthenticated:   true,
+		CodexHooksPath:       path,
+		CodexHooksUserScoped: true,
+	})
+	result := report.ByName("codex-hooks")
+	if result.Status != StatusReady || !strings.Contains(result.Message, "user-level") {
+		t.Fatalf("user-scoped Codex hooks were not accepted without project trust: %#v", result)
 	}
 }
 

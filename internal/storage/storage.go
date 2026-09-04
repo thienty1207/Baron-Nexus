@@ -19,7 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const currentSchemaVersion = 8
+const currentSchemaVersion = 9
 
 type Store struct {
 	db      *sql.DB
@@ -131,8 +131,21 @@ type KnowledgeRegistry struct {
 }
 
 func Open(path string) (*Store, error) {
+	return OpenWithContext(context.Background(), path)
+}
+
+// OpenWithContext initializes a local store without allowing SQLite setup or
+// migration to outlive the caller's operation budget. Hook processes use this
+// boundary because providers impose a short lifecycle timeout.
+func OpenWithContext(ctx context.Context, path string) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("state database path is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create state database directory: %w", err)
@@ -148,13 +161,13 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(8)
 	db.SetMaxIdleConns(8)
 	for _, pragma := range []string{"PRAGMA busy_timeout=5000", "PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"} {
-		if _, err := db.Exec(pragma); err != nil {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("configure SQLite (%s): %w", pragma, err)
 		}
 	}
 	store := &Store{db: db}
-	if err := store.migrate(context.Background()); err != nil {
+	if err := store.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -196,6 +209,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		for _, statement := range taskLedgerSchemaStatements {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("apply task ledger schema: %w", err)
+			}
+		}
+		for _, statement := range pentestSchemaStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply pentest schema: %w", err)
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_meta(schema_version) VALUES (?)`, currentSchemaVersion); err != nil {
@@ -265,6 +283,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		for _, statement := range taskLedgerSchemaStatements {
 			if _, err := tx.ExecContext(ctx, statement); err != nil {
 				return fmt.Errorf("apply task ledger migration: %w", err)
+			}
+		}
+		for _, statement := range pentestSchemaStatements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return fmt.Errorf("apply pentest migration: %w", err)
 			}
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE schema_meta SET schema_version=?`, currentSchemaVersion); err != nil {

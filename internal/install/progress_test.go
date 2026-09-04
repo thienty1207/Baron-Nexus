@@ -107,6 +107,19 @@ func TestLoadingUIPreparesFreshLineForInteractiveInput(t *testing.T) {
 	}
 }
 
+func TestRenderPentestProgressUsesBoundedPhaseAndDownloadOutput(t *testing.T) {
+	var output bytes.Buffer
+	reporter := NewProgressReporter(&output)
+	RenderPentestProgress(reporter, JobProgress{JobID: "pt-1", Phase: "snapshot", Current: 2, Total: 4, Detail: "files"})
+	RenderPentestProgress(reporter, JobProgress{JobID: "pt-1", Phase: "retest", Detail: "running"})
+	got := output.String()
+	for _, want := range []string{"Pentest pt-1: snapshot", "2 B/4 B", "Pentest pt-1: retest"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("pentest progress missing %q: %s", want, got)
+		}
+	}
+}
+
 type finalChunkReader struct {
 	data []byte
 	done bool

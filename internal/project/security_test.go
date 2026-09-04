@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/baron-shared-brain/baron/internal/testsupport"
 )
 
 func TestSetupRejectsSymlinkedBaronDirectory(t *testing.T) {
@@ -17,6 +19,9 @@ func TestSetupRejectsSymlinkedBaronDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(outside, filepath.Join(root, ".baron")); err != nil {
+		if testsupport.IsSymlinkPrivilegeError(err) {
+			t.Skipf("symbolic link privilege is unavailable: %v", err)
+		}
 		t.Fatal(err)
 	}
 	if _, err := Setup(context.Background(), root, SetupOptions{}); err == nil {
@@ -42,6 +47,9 @@ func TestSetupRejectsSymlinkedOwnedFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.Symlink(outside, filepath.Join(root, ".baron", name)); err != nil {
+			if testsupport.IsSymlinkPrivilegeError(err) {
+				t.Skipf("symbolic link privilege is unavailable: %v", err)
+			}
 			t.Fatal(err)
 		}
 		if _, err := Setup(context.Background(), root, SetupOptions{}); err == nil {

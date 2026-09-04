@@ -8,7 +8,6 @@ for phrase in \
   'Docker Desktop' \
   'WSL2' \
   'Ubuntu' \
-  'without silently' \
   'Codex Desktop boundary' \
   'CLI hook contract'; do
   if ! rg -q --fixed-strings "$phrase" "$README"; then
@@ -16,6 +15,11 @@ for phrase in \
     exit 20
   fi
 done
+
+if ! rg -U -q 'does not[[:space:]]+silently' "$README"; then
+  printf '%s\n' 'Platform guidance is missing the no-silent-Windows-mutation statement.' >&2
+  exit 20
+fi
 
 # The Windows installer only copies a verified binary. It must not grow
 # Docker/WSL/Tencent installation commands that would contradict the README.

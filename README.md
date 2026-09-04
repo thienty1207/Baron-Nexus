@@ -1,12 +1,11 @@
 # Baron Nexus
 
-Current release: `0.1.21` — preserves the newest bounded chat continuity across sessions.
-It also includes full Ubuntu/WSL uninstall cleanup for Docker volume and network
-removal, recreated npm caches, Codex launchers, and Baron update backups. It keeps
-the DSH `0.1.1-rc.2` profile verification fix, idempotent
-initialization, latest-at-run dependency refresh, loading feedback, explicit opt-in
-auto-accept launchers, path-checked full uninstall, concise DeepSeek key rotation,
-and automated Ubuntu/Debian first-install bootstrap.
+Current release target: `0.1.22` — adds an immutable Baron-managed runtime bundle
+for UV, compatible Python, Strix, Bun, Go, Node/npm/pnpm, DSH, and Codex while
+preserving the local-first continuity and Tencent recovery contracts. It keeps
+the DSH profile verification fix, idempotent initialization, progress feedback,
+explicit opt-in auto-accept launchers, path-checked ownership cleanup, DeepSeek
+credential fan-out, and automated Ubuntu/Debian host bootstrap.
 
 Baron Nexus is a native Go project continuity sidecar for DeepSeek Harness and Codex.
 It records local work state first, routes bounded project memory to TencentDB
@@ -15,16 +14,17 @@ daemon.
 
 ## Which command should you use?
 
-Baron has three different operations. `./install.sh` installs the command,
-`baron install` initializes the current project, and `baron update` only updates
-the installed command.
+Baron has three different operations. `./install.sh` or `install.ps1` installs
+the command, `baron install` activates the complete managed bundle for the
+current project, and `baron update` refreshes that bundle atomically.
 
 ### 1. First time on Ubuntu/Debian: `./install.sh`
 
 Run this once on a new Ubuntu or Debian machine. It downloads and verifies the
-native Baron binary into `~/.local/bin` and automatically bootstraps Docker
-Engine/Compose, supported Node/npm/npx, pnpm, and uv/uvx. It does not initialize
-DSH, Codex, Tencent, or a project yet:
+native Baron binary into `~/.local/bin` and bootstraps supported host
+Docker/Compose, Node/npm/npx, pnpm, and uv/uvx prerequisites. It does not
+initialize DSH, Codex, Tencent, the managed runtime generation, or a project
+yet:
 
 ```text
 git clone https://github.com/thienty1207/Baron-Nexus.git
@@ -35,7 +35,7 @@ export PATH="$HOME/.local/bin:$PATH"
 baron --version
 ```
 
-The expected output is `baron 0.1.21`. `sudo -v` must succeed before the first
+The expected output is `baron 0.1.22`. `sudo -v` must succeed before the first
 download. The installer resolves the latest Baron release tag, verifies the
 release manifest and SHA-256 list before writing the binary, resolves the
 latest Node/uv releases at run time, and checks Docker Engine/Compose,
@@ -53,9 +53,9 @@ the `docker` group automatically.
 ### 1b. First time on Windows: `install.ps1`
 
 Use PowerShell on Windows. Before installing Baron, install and start Docker
-Desktop, enable WSL2 with an Ubuntu distribution, and prepare the required
-Tencent service prerequisites. Baron does not silently install or control
-these Windows UI components.
+Desktop, or make Docker Engine reachable inside an Ubuntu WSL2 distribution;
+also prepare the required Tencent service prerequisites. Baron does not
+silently install or control these Windows UI components.
 
 ```powershell
 git clone https://github.com/thienty1207/Baron-Nexus.git
@@ -66,7 +66,7 @@ $env:Path = "$env:LOCALAPPDATA\Baron;$env:Path"
 baron --version
 ```
 
-The expected output is `baron 0.1.21`. The PowerShell installer resolves the
+The expected output is `baron 0.1.22`. The PowerShell installer resolves the
 latest Baron release tag, downloads the Windows amd64 release, verifies the
 release manifest and SHA-256 list, and installs it at
 `$env:LOCALAPPDATA\Baron\baron.exe`. It does not require sudo.
@@ -79,11 +79,10 @@ PowerShell window or run:
 
 ### 2. First time in a project: `baron install`
 
-After the command exists, run this once for each project. It verifies or
-refreshes the Baron binary, then bootstraps DSH, Codex, Tencent, and the
-current project's Baron state. On Ubuntu/Debian it also verifies or installs
-the host dependencies listed above before downloading the release or Tencent
-services.
+After the command exists, run this once for each project. It resolves one
+immutable plan, stages and verifies the complete Baron-managed runtime bundle,
+then bootstraps DSH, Codex, Tencent, and the current project's Baron state. On
+Ubuntu/Debian it also verifies or installs the host prerequisites listed above.
 
 #### Ubuntu/Debian
 
@@ -100,15 +99,15 @@ Set-Location C:\path\to\project
 baron install
 ```
 
-Windows must have Docker Desktop, WSL2, Ubuntu, and the required Tencent
-service prerequisites installed and started first. Baron does not silently
-install or control those Windows UI components, and Windows does not use the
-Linux `sudo -v` preflight.
+Windows must have either Docker Desktop or Docker Engine reachable through
+Ubuntu WSL2, plus the required Tencent service prerequisites. Baron does not
+silently install or control those Windows UI components, and Windows does not
+use the Linux `sudo -v` preflight.
 
-The sequence is idempotent, so rerunning it checks every live latest dependency
-candidate, skips verified-equal components, and repairs only missing or stale
-Baron-owned pieces without replacing project identity or user-owned agent
-configuration. On Ubuntu/Debian, Baron performs
+The sequence is idempotent, so rerunning it resolves the latest compatible
+stable candidates, skips verified-equal Baron-owned components, and repairs only
+missing or stale managed pieces without replacing project identity or user-owned
+agent configuration. On Ubuntu/Debian, Baron performs
 `sudo -v` before host/release/Tencent network work, uses sudo only for system
 operations, and never receives, echoes, or stores the password. If
 authorization expires, Baron requests sudo again once and stops with a repair
@@ -144,20 +143,35 @@ Set `BARON_INSTALL_TIMINGS=1` to include phase timing lines for discovery,
 dependency mutation, validation, and total bootstrap duration when diagnosing a
 slow machine. The timing output contains no command output or credentials.
 
+The managed bundle is described by the release catalog at
+`configs/managed-runtime-catalog.json` (copied into release artifacts). Archive
+components are extracted only after checksum verification. Package-backed
+components use their catalog-declared method: npm packages are installed into
+the Baron generation with lifecycle scripts disabled, and Strix is installed
+as the catalog-verified `strix-agent` package through the managed UV/Python
+pair. The managed npm runtime itself is archive-provided; PNPM, DSH, and Codex
+package installation runs only after that verified npm runtime is active. Every
+component is resolved for the exact current platform and
+architecture; a release without a complete Linux amd64 and Windows amd64
+catalog is not releasable.
+
 ### 3. Later version refresh: `baron update`
 
-Use this when a newer Baron release is available. It is binary-only: it does
-not run Docker, DSH, Codex, Tencent, or project setup, and the default
-`~/.local/bin` installation does not require sudo:
+Use this when a newer Baron release is available. The managed path resolves and
+activates one complete compatible bundle for Baron, UV, Python, Strix, Bun, Go,
+Node/npm/pnpm, DSH, and Codex, then refreshes Tencent/project contracts for the
+current project. It reuses verified components and rolls back the managed
+generation if activation or bootstrap fails:
 
 ```text
 baron update
 ```
 
-`baron update` is idempotent when the installed Baron version is already
-current. It updates only the verified Baron binary; to refresh external DSH,
-Codex, plugin, Node, pnpm, uv, Docker, or Tencent dependencies, rerun
-`baron install` or the relevant initializer.
+`baron update` is idempotent when the installed bundle is already current. It
+does not scan or rewrite other registered projects; those are refreshed at their
+next managed launch or explicit setup. A legacy installation without the
+managed-runtime coordinator may use the binary-only compatibility fallback and
+reports that state instead of claiming a full bundle update.
 Both `baron install` and `baron update` validate the release manifest, SHA-256,
 and candidate `baron --version` output before atomic replacement; a failed
 validation keeps the prior binary recoverable. They never overwrite project
@@ -181,7 +195,11 @@ explicit trusted-machine choice. The terminal displays the characters while
 you type, but Baron never copies the key into logs, JSON diagnostics, receipts,
 project state, command arguments, or assistant output. Tencent admin values
 still use hidden terminal input. Baron writes the validated DeepSeek key to
-DSH's official `$DSH_HOME/.credentials.yaml`, and reuses it for Tencent.
+DSH's official `$DSH_HOME/.credentials.yaml`, reuses it for Tencent, and fans
+it out to the Baron-managed Strix environment when the managed runtime is
+active. During a full managed bootstrap, the one key entered for DSH is
+therefore enough; the Tencent deployment `.env` is filled during its own
+checkout step.
 Codex ChatGPT sign-in remains owned by Codex: if global Codex auth is absent,
 Baron prints one action to run `codex` and complete sign-in; once completed,
 that auth is reused across projects and later launches. Baron does not ask for
@@ -245,9 +263,10 @@ DeepSeek key while a user is actively typing it in a trusted terminal.
 
 If an initializer is launched without a terminal and a required value is
 missing, it stops before Docker/Tencent downloads and reports the exact
-environment variable to set. On Windows, install Docker Desktop, WSL2, Ubuntu,
-and the required Tencent service prerequisites manually first; Baron reports
-this prerequisite without silently claiming to install Windows components.
+environment variable to set. On Windows, install Docker Desktop or prepare
+Docker Engine in Ubuntu WSL2, along with the required Tencent service
+prerequisites, manually first; Baron reports this prerequisite without
+silently claiming to install Windows components.
 
 Use `dsh web` or `codex` normally after setup. Baron hooks are short-lived and
 invoke the Go binary on demand.
@@ -278,6 +297,30 @@ The normal hooks use the direct Go entrypoint for a path-safe, Node-independent
 runtime; the bridge is available for Codex environments that require an
 explicit adapter process. It forwards lifecycle payloads to Baron and never
 owns Codex skills, provider settings, or authentication.
+
+## Pentest workflow
+
+Run an authorized assessment from the project directory:
+
+```text
+baron pentest --normal
+baron pentest --deep
+baron pentest --target <https-url> --normal
+baron pentest --target <https-url> --deep
+```
+
+Local scans use a Baron-owned snapshot, not the real working tree. Strix is
+report-only; in a managed Codex or DSH session the active agent may validate
+findings, apply source fixes, run tests, and retest. No commit, push, deploy, or
+publish is performed automatically. Use `baron pentest status <job-id>`,
+`baron pentest report <job-id>`, or `baron pentest stop <job-id>` for a job.
+URL-only targets remain scan/report-only because there is no mapped local
+source tree to remediate. Managed DSH/Codex launchers set the non-secret
+`BARON_CLIENT` identity so Baron can distinguish an active agent session from a
+direct human CLI invocation; restart the managed launcher after an update if
+the agent process was already running. On native Windows, Baron does not run a
+native Strix executable: pentest execution remains fail-closed until the
+verified Ubuntu WSL2 + Docker bridge is available.
 
 ## Project files
 
@@ -328,21 +371,21 @@ restore target already exists, Baron stops safely; choose
 `baron restore <archive> --replace-existing` only when you want the current
 state moved to a recoverable sibling backup first.
 
-To remove Baron and its known runtime footprint, run one command:
+To remove Baron and the Baron-owned runtime footprint, run one command:
 
 ```text
 baron uninstall
 ```
 
-The default is the full purge. It removes Baron global state, project state,
-managed hooks and launchers, DSH and Codex homes, DeepSeek/Codex/pnpm packages,
-Tencent deployment state, Docker objects and known Docker data, Baron-managed
-Node/npm/pnpm/uv caches and binaries, and known API-key assignments in the
-standard shell profiles. On Ubuntu/Debian it also purges the known Docker and
-Node/npm packages, services, repository entries, and host data through the
-existing sudo ticket. On Windows it uses `winget` when available for Docker
-Desktop and Node.js; otherwise the report includes a warning instead of
-pretending the host component was removed.
+The default is the receipt-backed purge. It removes Baron global/project state,
+Baron-managed hooks and launchers, the DeepSeek key from DSH's provider store,
+Baron-managed runtime generations, Strix credentials, caches, receipts, and
+the verified Tencent deployment files and owned Docker containers. It preserves
+the user's DSH/Codex homes and authentication, system Python/Node/Go/Bun/uv
+installations, Docker Desktop/Engine installation and unrelated Docker data,
+unrelated projects, and credentials that Baron cannot prove it owns. The
+operation cannot truthfully promise a factory-reset machine or remove every
+dependency installed by another tool.
 
 Press Enter, `y`, or `Y` at the confirmation prompt, or pass `--yes` for an
 explicit scripted run. `--purge-all` is the explicit default; the older
@@ -350,9 +393,7 @@ explicit scripted run. `--purge-all` is the explicit default; the older
 `$HOME/Baron-Nexus` is removed only when its `.git/config` points to
 `thienty1207/Baron-Nexus`; arbitrary directories are never scanned or deleted.
 The command cannot change the parent shell's environment, so any exported key
-is reported as requiring `unset` or a new shell after uninstall. It also does
-not claim to erase unrelated applications or make the operating system
-literally factory-new.
+is reported as requiring `unset` or a new shell after uninstall.
 
 ## Troubleshooting
 
